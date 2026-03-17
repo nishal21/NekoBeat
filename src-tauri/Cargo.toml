@@ -46,3 +46,4 @@ sha1 = "0.10.6"
 discord-rich-presence = "1.1.0"
 tauri-plugin-global-shortcut = "2.3.1"
 scraper = "0.19"
+openssl = { version = "0.10", features = ["vendored"] }
