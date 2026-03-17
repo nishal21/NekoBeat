@@ -1,0 +1,119 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-desktop:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+
+      - name: install gstreamer (macos only)
+        if: matrix.platform == 'macos-latest'
+        run: brew install gstreamer
+
+      - name: install gstreamer (windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: powershell
+        run: |
+          $gstreamerVersion = "1.22.5"
+          $msiUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.msi"
+          $develMsiUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-devel-msvc-x86_64-$gstreamerVersion.msi"
+          
+          Invoke-WebRequest -Uri $msiUrl -OutFile gstreamer-runtime.msi
+          Invoke-WebRequest -Uri $develMsiUrl -OutFile gstreamer-devel.msi
+          
+          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-runtime.msi /quiet /norestart"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-devel.msi /quiet /norestart"
+          
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
+          $env:PATH += ";C:\gstreamer\1.0\msvc_x86_64\bin"
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'NekoBeat ${{ github.ref_name }}'
+          releaseBody: 'See the assets below for the latest NekoBeat binaries.'
+          releaseDraft: true
+          prerelease: false
+
+  build-android:
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: setup java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: setup android sdk
+        uses: android-actions/setup-android@v3
+
+      - name: install rust and android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
+
+      - name: install ndk
+        run: sdkmanager "ndk;25.2.9519653"
+
+      - name: install gstreamer dev (required for compilation)
+        run: sudo apt-get update && sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: init android template
+        run: npm run tauri android init
+
+      - name: inject background permissions
+        run: |
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />' src-tauri/gen/android/app/src/main/AndroidManifest.xml
+
+      - name: build android apk
+        run: npm run tauri android build -- --apk
+
+      - name: upload release asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: src-tauri/gen/android/app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

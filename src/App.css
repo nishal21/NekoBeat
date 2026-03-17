@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "San Francisco", "Segoe UI Variable", "Roboto", sans-serif;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+
+  --color-neon-yellow: #dbff00;
+  --color-neon-green: #00ff66;
+  --color-surface-base: #09090b;
+  --color-surface-glass-heavy: rgba(9, 9, 11, 0.4);
+  --color-surface-glass-dark: rgba(9, 9, 11, 0.7);
+  --color-dark-glass: rgba(9, 9, 11, 0.7);
+  --color-neon-green-glowing: #B2FF05;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-surface-base);
+  color: white;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Custom scrollbar for webkit (used in Tauri/WebView2) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+@utility glass-panel {
+  background-color: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(64px);
+  -webkit-backdrop-filter: blur(64px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+@utility text-shadow-sm {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* --- Lyrics View CSS --- */
+
+@keyframes liquid-neon {
+  0% {
+    background-position: 200% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.liquid-neon-text {
+  background: linear-gradient(110deg,
+      var(--color-neon-green-glowing) 0%,
+      var(--color-neon-green-glowing) 40%,
+      #ffffff 55%,
+      #ffffff 100%);
+  background-size: 200% auto;
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: liquid-neon 1.5s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+  /* Reduced the blur radius from 20px to 8px for a tighter, sharper glow */
+  text-shadow: 0 0 8px rgba(178, 255, 5, 0.4);
+}
+
+@media (max-width: 768px) {
+  .liquid-neon-text {
+    text-shadow: 0 0 2px rgba(178, 255, 5, 0.5); /* Much sharper on mobile */
+  }
+}
+
+
+.lyrics-container {
+  perspective: 1200px;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  height: 100%;
+}
+
+.lyric-line {
+  scroll-snap-align: center;
+  scroll-margin-block: 50vh;
+  will-change: transform, opacity, filter;
+  transform-style: preserve-3d;
+}
+
+@utility mask-fade-x {
+  mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+}
+
+.orientation-vertical {
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  width: 12px;
+  height: 100%;
+}

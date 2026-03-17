@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+
+@theme {
+  --font-sans: "San Francisco", "Segoe UI Variable", "Roboto", "Inter", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-zinc-950 text-white antialiased overflow-hidden select-none;
+    font-family: var(--font-sans);
+  }
+
+  /* Custom scrollbar for webkit (used in Tauri/WebView2) */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+  }
+}
+
+@utility glass-panel {
+  @apply bg-white/5 backdrop-blur-3xl border border-white/10 shadow-2xl;
+}
+
+@utility text-shadow-sm {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
