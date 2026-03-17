@@ -28,7 +28,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          sudo apt-get install -y libunwind-dev libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 
       - name: install gstreamer (macos only)
         if: matrix.platform == 'macos-latest'
@@ -42,15 +42,24 @@ jobs:
           $msiUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.msi"
           $develMsiUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-devel-msvc-x86_64-$gstreamerVersion.msi"
           
-          Invoke-WebRequest -Uri $msiUrl -OutFile gstreamer-runtime.msi
-          Invoke-WebRequest -Uri $develMsiUrl -OutFile gstreamer-devel.msi
+          # Using curl.exe with a fake User-Agent (-A) bypasses the 418 Teapot block
+          echo "Downloading GStreamer Runtime..."
+          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-runtime.msi $msiUrl
           
-          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-runtime.msi /quiet /norestart"
-          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-devel.msi /quiet /norestart"
+          echo "Downloading GStreamer Devel..."
+          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-devel.msi $develMsiUrl
           
+          echo "Installing packages..."
+          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-runtime.msi /quiet /qn /norestart"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-devel.msi /quiet /qn /norestart"
+          
+          # Env vars for build
           echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
           echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
-          $env:PATH += ";C:\gstreamer\1.0\msvc_x86_64\bin"
+          
+          # Add to GITHUB_PATH
+          echo "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\gstreamer\1.0\msvc_x86_64\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: install frontend dependencies
         run: npm install
@@ -94,8 +103,10 @@ jobs:
       - name: install ndk
         run: sdkmanager "ndk;25.2.9519653"
 
-      - name: install gstreamer dev (required for compilation)
-        run: sudo apt-get update && sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Install System Dependencies for Android
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 
       - name: install frontend dependencies
         run: npm install
