@@ -38,33 +38,29 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: powershell
         run: |
-          $gstreamerVersion = "1.22.5"
-          $msiUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.msi"
-          $develMsiUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-devel-msvc-x86_64-$gstreamerVersion.msi"
+          $gstreamerVersion = "1.24.13"
+          $runtimeUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.msi"
+          $develUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-devel-msvc-x86_64-$gstreamerVersion.msi"
           
-          # Using curl.exe with a fake User-Agent (-A) bypasses the 418 Teapot block
           echo "Downloading GStreamer Runtime..."
-          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-runtime.msi $msiUrl
+          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-runtime.msi $runtimeUrl
           
           echo "Downloading GStreamer Devel..."
-          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-devel.msi $develMsiUrl
+          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-devel.msi $develUrl
           
           echo "Installing packages..."
-          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-runtime.msi /quiet /qn /norestart"
-          Start-Process msiexec.exe -Wait -ArgumentList "/i gstreamer-devel.msi /quiet /qn /norestart"
+          Start-Process msiexec.exe -Wait -ArgumentList '/i gstreamer-runtime.msi /quiet /qn /norestart'
+          Start-Process msiexec.exe -Wait -ArgumentList '/i gstreamer-devel.msi /quiet /qn /norestart'
           
-          # Env vars for build
-          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
+          echo "Adding GStreamer to PATH..."
+          "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
+          "C:\gstreamer\1.0\msvc_x86_64\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
           
-          # Add to GITHUB_PATH
-          echo "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "C:\gstreamer\1.0\msvc_x86_64\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
           echo "Installing pkg-config..."
           choco install pkgconfiglite --confirm
           
           echo "Setting PKG_CONFIG_PATH for Rust..."
-          echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding ASCII -Append
 
       - name: install frontend dependencies
         run: npm install
