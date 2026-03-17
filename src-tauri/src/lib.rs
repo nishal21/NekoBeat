@@ -2,6 +2,7 @@ use tauri::Manager;
 pub mod audio;
 pub mod library;
 pub mod aggregator;
+#[cfg(desktop)]
 pub mod discord_rpc;
 pub mod offline;
 pub mod news;
@@ -32,6 +33,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Initialize Discord RPC state
+            #[cfg(desktop)]
             app.manage(discord_rpc::DiscordState {
                 client: Arc::new(Mutex::new(None)),
             });
@@ -131,7 +133,9 @@ pub fn run() {
             aggregator::search::search_external,
             library::scan_directory,
             library::get_cached_tracks,
+            #[cfg(desktop)]
             discord_rpc::set_discord_activity,
+            #[cfg(desktop)]
             discord_rpc::clear_discord_activity,
             offline::toggle_like,
             offline::get_liked_tracks,

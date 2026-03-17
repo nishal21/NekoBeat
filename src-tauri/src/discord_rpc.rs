@@ -1,3 +1,4 @@
+#![cfg(desktop)]
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};

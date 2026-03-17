@@ -43,7 +43,10 @@ sha2 = "0.10.8"
 base64 = "0.22.1"
 chrono = "0.4.38"
 sha1 = "0.10.6"
-discord-rich-presence = "1.1.0"
 tauri-plugin-global-shortcut = "2.3.1"
 scraper = "0.19"
+
+# These will ONLY compile on Windows, macOS, and Linux
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+discord-rich-presence = "1.1.0"
 openssl = { version = "0.10", features = ["vendored"] }
