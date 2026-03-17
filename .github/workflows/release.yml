@@ -55,6 +55,13 @@ jobs:
           echo "Adding GStreamer to PATH..."
           "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
           "C:\gstreamer\1.0\msvc_x86_64\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
+          
+          echo "Installing pkg-config..."
+          choco install pkgconfiglite --confirm
+          
+          echo "Setting PKG_CONFIG_PATH for Rust..."
+          # Notice we removed the 'C:' to prevent pkg-config from splitting the string
+          "PKG_CONFIG_PATH=\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding ASCII -Append
 
       - name: install frontend dependencies
         run: npm install
@@ -74,56 +81,53 @@ jobs:
           prerelease: false
 
   build-android:
-    permissions:
-      contents: write
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: setup node
+      
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: setup java
+          
+      - run: npm install
+      
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
-
-      - name: setup android sdk
+          
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: install rust and android targets
+        
+      - name: Install NDK
+        run: sdkmanager "ndk;25.2.9519653"
+        
+      - name: THE SILVER BULLET - Expose NDK C-Compilers to Rust
+        run: echo "$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+        
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
-
-      - name: install ndk
-        run: sdkmanager "ndk;25.2.9519653"
-
+          
       - name: Install System Dependencies for Android
         run: |
           sudo apt-get update
           sudo apt-get install -y libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
-
-      - name: install frontend dependencies
-        run: npm install
-
-      - name: init android template
-        run: npm run tauri android init
-
-      - name: inject background permissions
+          
+      - name: Tauri Android Init and Permissions Inject
         run: |
+          npm run tauri android init
           sed -i '/<application/i \    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />' src-tauri/gen/android/app/src/main/AndroidManifest.xml
-
-      - name: build android apk
+          
+      - name: Build APK
         run: npm run tauri android build -- --apk
-
-      - name: upload release asset
+        
+      - name: Upload APK to Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: src-tauri/gen/android/app/build/outputs/apk/release/*.apk
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
