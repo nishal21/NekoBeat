@@ -41,7 +41,8 @@ jobs:
           $installerUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.exe"
           
           echo "Downloading GStreamer $gstreamerVersion..."
-          curl.exe -f -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer.exe $installerUrl
+          # Using a full Chrome 122 User-Agent to bypass the freedesktop 418 Teapot block
+          Invoke-WebRequest -Uri $installerUrl -OutFile "gstreamer.exe" -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
           
           echo "Installing GStreamer (Unified EXE)..."
           Start-Process -FilePath ".\gstreamer.exe" -ArgumentList "/quiet /norestart" -Wait
