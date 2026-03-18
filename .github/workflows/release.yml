@@ -115,10 +115,13 @@ jobs:
           npm run tauri android init
           sed -i '/<application/i \    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />' src-tauri/gen/android/app/src/main/AndroidManifest.xml
           
-      - name: Create Dummy Android Sidecar
+      - name: Create Dummy Android Sidecars
         run: |
           mkdir -p src-tauri/binaries
           touch src-tauri/binaries/spotiflac-cli-aarch64-linux-android
+          touch src-tauri/binaries/spotiflac-cli-armv7-linux-androideabi
+          touch src-tauri/binaries/spotiflac-cli-i686-linux-android
+          touch src-tauri/binaries/spotiflac-cli-x86_64-linux-android
           
       - name: Build APK
         run: npm run tauri android build -- --apk
