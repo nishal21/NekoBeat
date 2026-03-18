@@ -45,7 +45,7 @@ jobs:
           "C:\gstreamer\1.0\msvc_x86_64\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
           
           echo "Setting PKG_CONFIG_PATH for Rust..."
-          "PKG_CONFIG_PATH=C:/gstreamer/1.0/msvc_x86_64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding ASCII -Append
+          "PKG_CONFIG_PATH=/gstreamer/1.0/msvc_x86_64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding ASCII -Append
 
       - name: install frontend dependencies
         run: npm install
@@ -105,6 +105,11 @@ jobs:
         run: |
           npm run tauri android init
           sed -i '/<application/i \    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />' src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          
+      - name: Create Dummy Android Sidecar
+        run: |
+          mkdir -p src-tauri/binaries
+          touch src-tauri/binaries/spotiflac-cli-aarch64-linux-android
           
       - name: Build APK
         run: npm run tauri android build -- --apk
