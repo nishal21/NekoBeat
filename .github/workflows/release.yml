@@ -37,22 +37,12 @@ jobs:
       - name: Install Windows Dependencies
         if: matrix.platform == 'windows-latest'
         run: |
-          $gstreamerVersion = "1.28.1"
-          $installerUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.exe"
-          
-          echo "Downloading GStreamer $gstreamerVersion..."
-          # Using a full Chrome 122 User-Agent to bypass the freedesktop 418 Teapot block
-          Invoke-WebRequest -Uri $installerUrl -OutFile "gstreamer.exe" -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-          
-          echo "Installing GStreamer (Unified EXE)..."
-          Start-Process -FilePath ".\gstreamer.exe" -ArgumentList "/quiet /norestart" -Wait
+          echo "Installing GStreamer and pkg-config via Chocolatey..."
+          choco install gstreamer gstreamer-devel pkgconfiglite --confirm
           
           echo "Adding GStreamer to PATH..."
           "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
           "C:\gstreamer\1.0\msvc_x86_64\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
-          
-          echo "Installing pkg-config..."
-          choco install pkgconfiglite --confirm
           
           echo "Setting PKG_CONFIG_PATH for Rust..."
           "PKG_CONFIG_PATH=\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding ASCII -Append
