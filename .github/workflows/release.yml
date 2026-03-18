@@ -1,4 +1,7 @@
 name: Release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 on:
   push:
     tags:
@@ -40,11 +43,14 @@ jobs:
       - name: Install Windows Dependencies
         if: matrix.platform == 'windows-latest'
         run: |
-          # Injecting custom mirror link to bypass 418 Teapot error
+          # THIS IS THE MAGIC LINE that stops the runner from freezing
+          $ProgressPreference = 'SilentlyContinue'
+          
+          # Using GitHub's internal CDN to guarantee a successful download
           $installerUrl = "https://github.com/nishal21/NekoBeat/releases/download/build-deps/gstreamer-1.0-msvc-x86_64-1.28.1.exe"
           
-          echo "Downloading GStreamer from custom mirror..."
-          Invoke-WebRequest -Uri $installerUrl -OutFile "gstreamer.exe"
+          echo "Downloading GStreamer from GitHub CDN silently..."
+          Invoke-WebRequest -Uri $installerUrl -OutFile "gstreamer.exe" -UseBasicParsing
           
           echo "Installing GStreamer (Unified EXE)..."
           Start-Process -FilePath ".\gstreamer.exe" -ArgumentList "/quiet /norestart" -Wait
