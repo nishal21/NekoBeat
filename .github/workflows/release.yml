@@ -34,23 +34,17 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: brew install gstreamer
 
-      - name: install gstreamer (windows only)
+      - name: Install Windows Dependencies
         if: matrix.platform == 'windows-latest'
-        shell: powershell
         run: |
-          $gstreamerVersion = "1.24.13"
-          $runtimeUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.msi"
-          $develUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-devel-msvc-x86_64-$gstreamerVersion.msi"
+          $gstreamerVersion = "1.28.1"
+          $installerUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstreamerVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstreamerVersion.exe"
           
-          echo "Downloading GStreamer Runtime..."
-          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-runtime.msi $runtimeUrl
+          echo "Downloading GStreamer $gstreamerVersion..."
+          curl.exe -f -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer.exe $installerUrl
           
-          echo "Downloading GStreamer Devel..."
-          curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o gstreamer-devel.msi $develUrl
-          
-          echo "Installing packages..."
-          Start-Process msiexec.exe -Wait -ArgumentList '/i gstreamer-runtime.msi /quiet /qn /norestart INSTALLDIR="C:\gstreamer"'
-          Start-Process msiexec.exe -Wait -ArgumentList '/i gstreamer-devel.msi /quiet /qn /norestart INSTALLDIR="C:\gstreamer"'
+          echo "Installing GStreamer (Unified EXE)..."
+          Start-Process -FilePath ".\gstreamer.exe" -ArgumentList "/quiet /norestart" -Wait
           
           echo "Adding GStreamer to PATH..."
           "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding ASCII -Append
@@ -60,7 +54,6 @@ jobs:
           choco install pkgconfiglite --confirm
           
           echo "Setting PKG_CONFIG_PATH for Rust..."
-          # Notice we removed the 'C:' to prevent pkg-config from splitting the string
           "PKG_CONFIG_PATH=\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding ASCII -Append
 
       - name: install frontend dependencies
