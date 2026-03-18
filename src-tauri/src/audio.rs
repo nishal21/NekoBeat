@@ -1,3 +1,4 @@
+#![cfg(desktop)]
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use tauri::{AppHandle, Emitter, State};
