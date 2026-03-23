@@ -18,7 +18,6 @@ dist-ssr
 Cargo.lock
 
 
-
 # Tauri Bundles
 /src-tauri/target/release/bundle/
 /bundle/
