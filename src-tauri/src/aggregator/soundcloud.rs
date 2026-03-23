@@ -138,12 +138,12 @@ pub async fn resolve(url: &str) -> Result<String, String> {
         
         // Try http_mp3_128_url first (direct MP3 — what Muffon uses)
         if let Some(mp3_url) = streams_data["http_mp3_128_url"].as_str() {
-            println!("SoundCloud: Got direct MP3 stream from /streams endpoint");
+            println!("SoundCloud: Found Strategy 1 (direct MP3): {}", &mp3_url[..std::cmp::min(mp3_url.len(), 50)]);
             return Ok(mp3_url.to_string());
         }
         // Try hls_mp3_128_url as second option
         if let Some(hls_url) = streams_data["hls_mp3_128_url"].as_str() {
-            println!("SoundCloud: Got HLS MP3 stream from /streams endpoint (not ideal)");
+            println!("SoundCloud: Found HLS option in /streams: {}", &hls_url[..std::cmp::min(hls_url.len(), 50)]);
             // We don't want HLS, fall through to Strategy 2
             let _ = hls_url;
         }
@@ -193,14 +193,14 @@ pub async fn resolve(url: &str) -> Result<String, String> {
             .json().await.map_err(|e| e.to_string())?;
 
         if let Some(actual_url) = stream_response["url"].as_str() {
-            println!("SoundCloud: Got progressive MP3 from transcodings");
+            println!("SoundCloud: Found Strategy 2 (progressive): {}", &actual_url[..std::cmp::min(actual_url.len(), 50)]);
             return Ok(actual_url.to_string());
         }
     }
 
     // Fallback: HLS audio/mpeg — download the .m3u8 playlist and concatenate MP3 segments
     if let Some(hls_url) = hls_mpeg_url {
-        println!("SoundCloud: Using HLS audio/mpeg fallback — downloading segments...");
+        println!("SoundCloud: Using Strategy 3 (HLS assembly)...");
         let stream_auth_url = format!("{}?client_id={}", hls_url, client_id);
         let stream_response: Value = client.get(&stream_auth_url)
             .send().await.map_err(|e| e.to_string())?
@@ -217,7 +217,11 @@ pub async fn resolve(url: &str) -> Result<String, String> {
                 .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
                 .collect();
 
-            println!("SoundCloud: Found {} HLS segments to download", segment_urls.len());
+            println!("SoundCloud: Found {} HLS segments to download for assembly", segment_urls.len());
+            
+            if segment_urls.is_empty() {
+                return Err("SoundCloud: HLS playlist is empty".to_string());
+            }
 
             // Download all segments and concatenate into one MP3 buffer
             let mut full_mp3 = Vec::new();
@@ -243,7 +247,7 @@ pub async fn resolve(url: &str) -> Result<String, String> {
                 std::fs::write(&temp_path, &full_mp3)
                     .map_err(|e| format!("Failed to write temp MP3: {}", e))?;
                 
-                println!("SoundCloud: Assembled {} bytes of MP3 from HLS segments -> {:?}", full_mp3.len(), temp_path);
+                println!("SoundCloud: Successfully assembled {} bytes -> {:?}", full_mp3.len(), temp_path);
                 return Ok(format!("file://{}", temp_path.to_string_lossy()));
             }
         }

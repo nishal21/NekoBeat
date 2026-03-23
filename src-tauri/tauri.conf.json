@@ -21,9 +21,12 @@
       "csp": null
     }
   },
-  "bundle": {
+    "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "gstreamer/**/*"
+    ],
     "externalBin": [
       "binaries/spotiflac-cli"
     ],
@@ -34,5 +37,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/nishal21/NekoBeat/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW5rbm93biBwdWJsaWMga2V5Cg==",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

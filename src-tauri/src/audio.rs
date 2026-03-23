@@ -1,4 +1,3 @@
-#![cfg(desktop)]
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use tauri::{AppHandle, Emitter, State};
@@ -24,17 +23,40 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
     let tx_internal = tx.clone();
 
     thread::spawn(move || {
-        println!("Initializing GStreamer audio engine...");
-        if let Err(e) = gstreamer::init() {
-            eprintln!("Failed to initialize GStreamer: {}", e);
-            let _ = app_handle.emit("audio-error", format!("GStreamer init error: {}", e));
-            return;
-        }
+        let exe_path = std::env::current_exe().unwrap_or_default();
+        let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let log_path = exe_dir.join("nekobeat_startup.log");
+
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "GStreamer audio thread initialized.")
+        });
 
         use gstreamer::prelude::*;
         let playbin = gstreamer::ElementFactory::make("playbin")
             .build()
             .expect("Failed to create playbin element");
+
+        // Set a modern User-Agent and Referer for all network requests (SoundCloud/YouTube)
+        playbin.connect("source-setup", false, move |args| {
+            let source = args[1].get::<gstreamer::Element>().unwrap();
+            let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+            
+            if source.has_property("user-agent", None) {
+                source.set_property("user-agent", &ua);
+            }
+            
+            // Set Referer via extra-headers structure if supported (souphttpsrc)
+            if source.has_property("extra-headers", None) {
+                let mut structure = gstreamer::Structure::new_empty("headers");
+                structure.set("Referer", &"https://soundcloud.com/");
+                source.set_property("extra-headers", &structure);
+                println!("GStreamer: Custom User-Agent and Referer set for source element");
+            } else {
+                println!("GStreamer: Custom User-Agent set for source element (extra-headers not supported)");
+            }
+            None
+        });
 
         let equalizer = gstreamer::ElementFactory::make("equalizer-10bands")
             .build()
@@ -45,15 +67,32 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         let bus = playbin.bus().expect("Failed to get bus from playbin");
         let app_handle_for_bus = app_handle.clone();
 
+        // Helper to handle state change errors without panicking
+        let set_state_safe = |element: &gstreamer::Element, state: gstreamer::State, app: &AppHandle| {
+            if let Err(err) = element.set_state(state) {
+                let err_msg = format!("GStreamer State Change Error ({:?}): {}", state, err);
+                eprintln!("{}", err_msg);
+                
+                // Also log to file for release debugging
+                let _ = std::fs::OpenOptions::new().append(true).open(&log_path).and_then(|mut f| {
+                    use std::io::Write;
+                    writeln!(f, "{}", err_msg)
+                });
+                
+                let _ = app.emit("audio-error", err_msg);
+                return false;
+            }
+            true
+        };
+
         loop {
             // Check for commands with a short timeout to keep the loop responsive
             if let Ok(cmd) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 match cmd {
                     AudioCommand::Play(path) => {
                         println!("GStreamer: Playing local file: {}", path);
-                        playbin.set_state(gstreamer::State::Null).unwrap();
+                        set_state_safe(&playbin, gstreamer::State::Null, &app_handle);
                         
-                        // Use the url crate to correctly format the file URI (handles encoding correctly)
                         let uri = if let Ok(u) = url::Url::from_file_path(&path) {
                             u.to_string()
                         } else {
@@ -61,28 +100,36 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         };
                         
                         playbin.set_property("uri", &uri);
-                        playbin.set_state(gstreamer::State::Playing).unwrap();
-                        let _ = app_handle.emit("audio-playing", path);
+                        if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
+                            let _ = app_handle.emit("audio-playing", path);
+                        }
                     }
                     AudioCommand::PlayUrl(url) => {
                         println!("GStreamer: Playing URL: {}", url);
-                        playbin.set_state(gstreamer::State::Null).unwrap();
+                        
+                        // Log URI to startup log for debugging
+                        let _ = std::fs::OpenOptions::new().append(true).open(&log_path).and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(f, "GStreamer: Attempting to play URL: {}", url)
+                        });
+
+                        set_state_safe(&playbin, gstreamer::State::Null, &app_handle);
                         playbin.set_property("uri", &url);
-                        playbin.set_state(gstreamer::State::Playing).unwrap();
-                        let _ = app_handle.emit("audio-playing", url);
+                        if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
+                            let _ = app_handle.emit("audio-playing", url);
+                        }
                     }
                     AudioCommand::Pause => {
                         println!("GStreamer: Pausing");
-                        playbin.set_state(gstreamer::State::Paused).unwrap();
+                        set_state_safe(&playbin, gstreamer::State::Paused, &app_handle);
                     }
                     AudioCommand::Resume => {
                         println!("GStreamer: Resuming");
-                        playbin.set_state(gstreamer::State::Playing).unwrap();
+                        set_state_safe(&playbin, gstreamer::State::Playing, &app_handle);
                     }
                     AudioCommand::Seek(duration) => {
                         println!("GStreamer: Seeking to {:?}", duration);
                         let position = gstreamer::ClockTime::from_nseconds(duration.as_nanos() as u64);
-                        // Using a safer seek flag combination
                         let flags = gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::KEY_UNIT | gstreamer::SeekFlags::ACCURATE;
                         if let Err(e) = playbin.seek_simple(flags, position) {
                             eprintln!("GStreamer Seek Error: {}", e);
@@ -93,15 +140,10 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         playbin.set_property("volume", &volume);
                     }
                     AudioCommand::SetEqBand(band, gain) => {
-                        // GStreamer equalizer-10bands has 10 bands (0-9) and typically a range of -24.0 to +12.0
                         if band >= 10 {
                             eprintln!("GStreamer: Invalid EQ band index: {}", band);
                         } else {
                             let clamped_gain = gain.clamp(-24.0, 12.0);
-                            if clamped_gain != gain {
-                                println!("GStreamer: Gain {}dB out of range for band {}, clamping to {}dB", gain, band, clamped_gain);
-                            }
-                            println!("GStreamer: Setting EQ band {} to {}dB", band, clamped_gain);
                             let prop_name = format!("band{}", band);
                             equalizer.set_property(&prop_name, &clamped_gain);
                         }
@@ -136,9 +178,8 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         let _ = app_handle_for_bus.emit("audio-error", format!("GStreamer error: {}", err.error()));
                     }
                     MessageView::StateChanged(state) => {
-                        // Optional: listen for state changes to stay in sync
                         if state.src().map(|s| s == playbin.upcast_ref::<gstreamer::Object>()).unwrap_or(false) {
-                            // println!("GStreamer State Change: {:?} -> {:?}", state.old_state(), state.current_state());
+                            // Optional: status tracking
                         }
                     }
                     _ => {}
@@ -160,11 +201,8 @@ pub async fn stream_external_audio(
     println!("Streaming external audio from {}: {}", source, url);
     match crate::aggregator::resolver::resolve_url(&app, &url).await {
         Ok(resolved_url) => {
-            println!("Successfully resolved stream URL: {}", &resolved_url[..std::cmp::min(resolved_url.len(), 100)]);
-            // If the resolved URL is a local temp file (from HLS assembly), play it directly
             if resolved_url.starts_with("file://") {
                 let file_path = resolved_url.trim_start_matches("file://").to_string();
-                println!("Playing assembled HLS file: {}", file_path);
                 state.tx.send(AudioCommand::Play(file_path)).map_err(|e| e.to_string())?;
             } else {
                 state.tx.send(AudioCommand::PlayUrl(resolved_url.clone())).map_err(|e| e.to_string())?;

@@ -14,11 +14,10 @@ pub struct TrackData {
     pub album: String,
     pub duration_ms: u64,
     pub source: Option<String>,
+    pub local_lyrics: Option<String>,
 }
 
 pub fn init_db() -> SqlResult<Connection> {
-    // In production, resolving the user data dir via Tauri AppHandle is preferred.
-    // For now, an in-memory or generic local file database for demo purposes is fine.
     let conn = Connection::open("nekobeat.db")?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tracks (
@@ -27,10 +26,15 @@ pub fn init_db() -> SqlResult<Connection> {
             title TEXT,
             artist TEXT,
             album TEXT,
-            duration_ms INTEGER
+            duration_ms INTEGER,
+            local_lyrics TEXT
         )",
         [],
     )?;
+
+    // Migration: Add local_lyrics column if it doesn't exist (for existing databases)
+    let _ = conn.execute("ALTER TABLE tracks ADD COLUMN local_lyrics TEXT", []);
+
     Ok(conn)
 }
 
@@ -41,22 +45,27 @@ pub async fn scan_directory(path: String) -> Result<Vec<TrackData>, String> {
 
     for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        // only scan known audio formats roughly
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str == "mp3" || ext_str == "flac" || ext_str == "m4a" || ext_str == "wav" {
-                if let Ok(track) = extract_metadata(path) {
+                if let Ok(mut track) = extract_metadata(path) {
                     
-                    // Insert or ignore into DB for fast caching
+                    // Check if we already have this track and its lyrics
+                    let mut stmt = conn.prepare("SELECT local_lyrics FROM tracks WHERE filepath = ?1").map_err(|e| e.to_string())?;
+                    let existing_lyrics: Option<String> = stmt.query_row(params![track.filepath], |row| row.get(0)).ok();
+                    track.local_lyrics = existing_lyrics;
+
+                    // Insert or ignore into DB
                     let _ = conn.execute(
-                        "INSERT OR IGNORE INTO tracks (filepath, title, artist, album, duration_ms)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        "INSERT OR IGNORE INTO tracks (filepath, title, artist, album, duration_ms, local_lyrics)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
                             track.filepath,
                             track.title,
                             track.artist,
                             track.album,
-                            track.duration_ms as i64
+                            track.duration_ms as i64,
+                            track.local_lyrics
                         ],
                     );
                     
@@ -92,13 +101,14 @@ fn extract_metadata(path: &Path) -> Result<TrackData, String> {
         album,
         duration_ms,
         source: Some("local".to_string()),
+        local_lyrics: None,
     })
 }
 
 #[tauri::command]
 pub fn get_cached_tracks() -> Result<Vec<TrackData>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT filepath, title, artist, album, duration_ms FROM tracks")
+    let mut stmt = conn.prepare("SELECT filepath, title, artist, album, duration_ms, local_lyrics FROM tracks")
         .map_err(|e| e.to_string())?;
     
     let track_iter = stmt.query_map([], |row| {
@@ -109,6 +119,7 @@ pub fn get_cached_tracks() -> Result<Vec<TrackData>, String> {
             album: row.get(3)?,
             duration_ms: row.get::<usize, i64>(4)? as u64,
             source: Some("local".to_string()),
+            local_lyrics: row.get(5)?,
         })
     }).map_err(|e| e.to_string())?;
 

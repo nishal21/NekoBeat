@@ -87,15 +87,6 @@ To build NekoBeat locally, ensure you have the following installed:
    npm run tauri dev
    ```
 
-## ❤️ Credits & Acknowledgments
-NekoBeat is built upon the giant shoulders of the open-source community. Special thanks to the following projects for their inspiration, APIs, and reference implementations:
-
-- **[Harmonoid](https://github.com/harmonoid/harmonoid)**: Elegant music management inspiration.
-- **[Muffon](https://github.com/muffon/muffon)** & **[Muffon API](https://github.com/staniel359/muffon-api)**: Extensive music source aggregation patterns.
-- **[SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC)**: High-quality audio resolution logic.
-- **[Musicxmatch API](https://github.com/Strvm/musicxmatch-api)**: Reverse-engineered lyrics fetching reference.
-- **[Spotify Lyrics API](https://github.com/akashrchandran/spotify-lyrics-api)**: RESTful lyrics delivery architecture.
-
 <p align="center">
 Made with ❤️ by Nishal
 

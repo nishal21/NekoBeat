@@ -203,7 +203,100 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
             // Optionally emit an event back to the frontend to say download finished
             let _ = app_handle.emit("liked-track-downloaded", ());
         });
-
-        Ok(true) // Liked is now true
+        Ok(true)
     }
+}
+
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn convert_srt_vtt_to_lrc(content: String) -> String {
+    let mut lrc = String::new();
+    let re_srt = regex::Regex::new(r"(\d+)\s+(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s+([\s\S]*?)(?:\n\n|\z)").unwrap();
+    let re_vtt = regex::Regex::new(r"(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\s+([\s\S]*?)(?:\n\n|\z)").unwrap();
+
+    // Try SRT first
+    let mut found = false;
+    for cap in re_srt.captures_iter(&content) {
+        found = true;
+        let start_time = &cap[2].replace(',', ".");
+        // Convert HH:MM:SS.mmm to [MM:SS.xx]
+        if let Some(lrc_time) = format_lrc_time(start_time) {
+            let text = cap[4].replace('\n', " ");
+            lrc.push_str(&format!("[{}] {}\n", lrc_time, text.trim()));
+        }
+    }
+
+    if !found {
+        // Try VTT
+        for cap in re_vtt.captures_iter(&content) {
+            let start_time = &cap[1];
+            if let Some(lrc_time) = format_lrc_time(start_time) {
+                let text = cap[3].replace('\n', " ");
+                lrc.push_str(&format!("[{}] {}\n", lrc_time, text.trim()));
+            }
+        }
+    }
+
+    if lrc.is_empty() { content.to_string() } else { lrc }
+}
+
+fn format_lrc_time(time_str: &str) -> Option<String> {
+    // Input: HH:MM:SS.mmm
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() == 3 {
+        let hrs: u32 = parts[0].parse().unwrap_or(0);
+        let mins: u32 = parts[1].parse().unwrap_or(0);
+        let secs_parts: Vec<&str> = parts[2].split('.').collect();
+        if secs_parts.len() == 2 {
+            let secs: u32 = secs_parts[0].parse().unwrap_or(0);
+            let ms: u32 = secs_parts[1].parse().unwrap_or(0);
+            
+            let total_mins = hrs * 60 + mins;
+            let centisecs = ms / 10;
+            return Some(format!("{:02}:{:02}.{:02}", total_mins, secs, centisecs));
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub async fn update_track_lyrics(app: tauri::AppHandle, track_id: String, filepath: Option<String>, lyrics: String) -> Result<(), String> {
+    let processed_lyrics = if lyrics.contains("-->") {
+        convert_srt_vtt_to_lrc(lyrics.clone())
+    } else {
+        lyrics
+    };
+
+    // 1. Check if it's a local track (SQLite)
+    if let Some(path) = filepath {
+        if Path::new(&path).exists() {
+            println!("Offline: Updating local track lyrics at {:?}", path);
+            let conn = crate::library::init_db().map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE tracks SET local_lyrics = ?1 WHERE filepath = ?2",
+                rusqlite::params![processed_lyrics, path],
+            ).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+
+    // 2. Otherwise update the Liked registry
+    let registry_path = get_registry_path(&app);
+    if registry_path.exists() {
+        let content = fs::read_to_string(&registry_path).map_err(|e| e.to_string())?;
+        let mut tracks: Vec<LikedTrack> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        
+        if let Some(track) = tracks.iter_mut().find(|t| t.id == track_id) {
+            track.local_lyrics = Some(processed_lyrics);
+            fs::write(&registry_path, serde_json::to_string_pretty(&tracks).unwrap()).map_err(|e| e.to_string())?;
+            println!("Offline: Updated liked track lyrics for id {}", track_id);
+            return Ok(());
+        }
+    }
+
+    Err("Track not found in Library or Liked tracks".to_string())
 }

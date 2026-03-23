@@ -63,9 +63,6 @@ async fn resolve_youtube(url: &str) -> Result<String, String> {
         return Ok(file_url);
     }
 
-    // Continue to check for other formats but ONLY if we haven't successfully enforced M4A yet
-    // Actually, it's safer to just proceed to download if .m4a is missing to ensure consistency
-    
     println!("YouTube: Downloading audio via yt-dlp for {}...", video_id);
 
     // Download native best audio format (m4a) without ffmpeg post-processing
@@ -180,5 +177,6 @@ fn extract_youtube_id(url: &str) -> Option<&str> {
 }
 
 async fn resolve_soundcloud(url: &str) -> Result<String, String> {
+    // Direct API for maximum speed, relying on audio.rs header fixes
     crate::aggregator::soundcloud::resolve(url).await
 }

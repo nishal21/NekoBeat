@@ -12,30 +12,21 @@ dist
 dist-ssr
 *.local
 
-# Editor directories and files
+# Rust
+/target/
+/src-tauri/target/
+Cargo.lock
+
+
+
+# Tauri Bundles
+/src-tauri/target/release/bundle/
+/bundle/
+
+# VS Code
 .vscode/*
 !.vscode/extensions.json
-.idea
+
+# OS
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Tauri / Rust
-src-tauri/target
-target
-
-# OS files
 Thumbs.db
-.DS_Store
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Mobile builds
-src-tauri/gen/android
-src-tauri/gen/apple

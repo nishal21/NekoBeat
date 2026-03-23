@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, memo } from "react";
-import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, EQ_PRESETS } from "./hooks";
 // Used for interacting with system dialogs in Tauri
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
 import logoImg from "./assets/logo.png";
 
 // Provide a stable time formatter outside of renders
@@ -71,7 +72,7 @@ const ExpandedProgressBar = memo(({ positionMs, durationMs, onSeek }: { position
   );
 });
 
-const LyricsDisplay = memo(({ parsedLyrics, activeLyricIndex, hasPlainLyrics, plainLyricsText, lyricsOffsetMs, onOffsetChange }: { parsedLyrics: { timeMs: number, text: string }[], activeLyricIndex: number, hasPlainLyrics: boolean, plainLyricsText?: string, lyricsOffsetMs: number, onOffsetChange: (offset: number) => void }) => {
+const LyricsDisplay = memo(({ parsedLyrics, activeLyricIndex, hasPlainLyrics, plainLyricsText, lyricsOffsetMs, onOffsetChange, onUploadLyrics }: { parsedLyrics: { timeMs: number, text: string }[], activeLyricIndex: number, hasPlainLyrics: boolean, plainLyricsText?: string, lyricsOffsetMs: number, onOffsetChange: (offset: number) => void, onUploadLyrics?: () => void }) => {
 
   // Smoothly scroll the active lyric into the center of the mask
   useEffect(() => {
@@ -85,20 +86,34 @@ const LyricsDisplay = memo(({ parsedLyrics, activeLyricIndex, hasPlainLyrics, pl
 
   return (
     <div
-      className="lyrics-container no-scrollbar py-[40vh] px-4 md:px-12 overflow-y-auto scroll-smooth"
+      className="lyrics-container no-scrollbar py-[40vh] px-4 md:px-12 overflow-y-auto scroll-smooth group/lyrics"
       id="lyrics-scroll-root"
       style={{
         maskImage: "linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)"
       }}
     >
-      {parsedLyrics.length > 0 && (
-        <div className="fixed top-8 right-8 z-50 flex items-center gap-4 bg-black/40 backdrop-blur-xl rounded-full px-4 py-2 border border-white/10 shadow-2xl transition-opacity hover:opacity-100 opacity-30">
-          <button onClick={() => onOffsetChange(lyricsOffsetMs - 500)} className="text-white hover:text-[var(--color-neon-yellow)] font-bold w-6 h-6 flex items-center justify-center bg-white/10 rounded-full" title="Advance lyrics (-0.5s)">-</button>
-          <span className="text-xs font-mono text-white font-bold w-12 text-center" title="Current Lyrics Offset">{lyricsOffsetMs > 0 ? '+' : ''}{(lyricsOffsetMs / 1000).toFixed(1)}s</span>
-          <button onClick={() => onOffsetChange(lyricsOffsetMs + 500)} className="text-white hover:text-[var(--color-neon-yellow)] font-bold w-6 h-6 flex items-center justify-center bg-white/10 rounded-full" title="Delay lyrics (+0.5s)">+</button>
-        </div>
-      )}
+      {/* Control Bar */}
+      <div className="fixed top-8 right-8 z-50 flex items-center gap-2 transition-opacity group-hover/lyrics:opacity-100 opacity-20 hover:opacity-100">
+        {onUploadLyrics && (
+           <button 
+             onClick={onUploadLyrics}
+             className="flex items-center gap-2 bg-black/40 backdrop-blur-xl rounded-full px-4 py-2 border border-white/10 shadow-2xl text-xs font-bold text-white hover:text-[var(--color-neon-yellow)] hover:bg-white/10 transition-all"
+             title="Upload Lyrics (.lrc, .srt, .vtt)"
+           >
+             <ListMusic size={14} />
+             <span>Upload</span>
+           </button>
+        )}
+        {parsedLyrics.length > 0 && (
+          <div className="flex items-center gap-4 bg-black/40 backdrop-blur-xl rounded-full px-4 py-2 border border-white/10 shadow-2xl">
+            <button onClick={() => onOffsetChange(lyricsOffsetMs - 500)} className="text-white hover:text-[var(--color-neon-yellow)] font-bold w-6 h-6 flex items-center justify-center bg-white/10 rounded-full" title="Advance lyrics (-0.5s)">-</button>
+            <span className="text-xs font-mono text-white font-bold w-12 text-center" title="Current Lyrics Offset">{lyricsOffsetMs > 0 ? '+' : ''}{(lyricsOffsetMs / 1000).toFixed(1)}s</span>
+            <button onClick={() => onOffsetChange(lyricsOffsetMs + 500)} className="text-white hover:text-[var(--color-neon-yellow)] font-bold w-6 h-6 flex items-center justify-center bg-white/10 rounded-full" title="Delay lyrics (+0.5s)">+</button>
+          </div>
+        )}
+      </div>
+
       {parsedLyrics.length > 0 ? (
         <div className="flex flex-col gap-6 md:gap-10">
           {parsedLyrics.map((line, ix) => {
@@ -260,28 +275,30 @@ const VolumeControl = memo(({ volume, onChange }: { volume: number, onChange: (v
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.9 }}
             transition={{ duration: 0.15, ease: "easeOut" }}
-            className="absolute bottom-12 flex flex-col items-center justify-center w-10 h-32 bg-zinc-900/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden"
+            className="absolute bottom-12 flex flex-col items-center justify-center w-12 h-40 bg-zinc-900/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden py-4"
           >
-            {/* Visual background track */}
-            <div className="relative w-1.5 h-24 bg-white/10 rounded-full overflow-hidden pointer-events-none">
-              {/* Visual fill */}
-              <div 
-                className="absolute bottom-0 w-full bg-[var(--color-neon-yellow)] rounded-full transition-all duration-75"
-                style={{ height: `${volume * 100}%` }}
+            <div className="relative w-8 h-32 flex items-center justify-center group/vol">
+              {/* Visual Track (Centered) */}
+              <div className="relative w-1.5 h-full bg-white/10 rounded-full overflow-hidden pointer-events-none">
+                {/* Visual fill */}
+                <div 
+                  className="absolute bottom-0 w-full bg-[var(--color-neon-yellow)] rounded-full transition-all duration-75"
+                  style={{ height: `${volume * 100}%` }}
+                />
+              </div>
+              
+              {/* Wide Native vertical slider on top (Invisible hit area) */}
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={volume}
+                onChange={(e) => onChange(parseFloat(e.target.value))}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer orientation-vertical z-10"
+                style={{ appearance: 'slider-vertical' } as any}
               />
             </div>
-
-            {/* Invisible input on top */}
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={(e) => onChange(parseFloat(e.target.value))}
-              className="absolute w-24 h-6 -rotate-90 opacity-0 cursor-pointer z-10"
-              style={{ WebkitAppearance: 'none' }}
-            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -399,6 +416,29 @@ function App() {
     return (saved as 'grid' | 'list') || 'grid';
   });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<{ version: string, date?: string, body?: string } | null>(null);
+
+  // Auto-Updater Check
+  useEffect(() => {
+    const checkUpdate = async () => {
+      try {
+        const update = await check();
+        if (update) {
+          console.log(`Update available: ${update.version}`);
+          setUpdateInfo({
+            version: update.version,
+            date: update.date,
+            body: update.body
+          });
+        }
+      } catch (e) {
+        console.error("Failed to check for updates:", e);
+      }
+    };
+    // Check for updates on startup with a slight delay
+    const timer = setTimeout(checkUpdate, 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('nekobeat_auto_loop_liked', JSON.stringify(autoLoopLiked));
@@ -591,6 +631,52 @@ function App() {
   onNextRef.current = handleNextTrack;
   onPrevRef.current = handlePrevTrack;
   onTogglePlayRef.current = () => togglePause();
+
+  const handleUploadLyrics = async () => {
+    if (!playerTrack) return;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{
+          name: 'Lyrics',
+          extensions: ['lrc', 'srt', 'vtt', 'txt']
+        }]
+      });
+
+      if (selected && typeof selected === 'string') {
+        const content = await invoke<string>('read_text_file', { path: selected });
+        
+        // Update backend
+        await invoke('update_track_lyrics', { 
+            trackId: playerTrack.id || '', 
+            filepath: playerTrack.filepath || null,
+            lyrics: content 
+        });
+        
+        // Process for immediate UI update
+        let finalLyrics = content;
+        if (content.includes('-->')) {
+           finalLyrics = await invoke<string>('convert_srt_vtt_to_lrc', { content });
+        }
+        
+        const isSynced = finalLyrics.trim().startsWith('[');
+        if (isSynced) {
+            setParsedLyrics(parseLrc(finalLyrics));
+            setLyricsData({ syncedLyrics: finalLyrics });
+        } else {
+            setParsedLyrics([]);
+            setLyricsData({ plainLyrics: finalLyrics });
+        }
+        
+        // Update the current playerTrack object in memory so it reflects the change if we re-render
+        if (playerTrack) {
+           (playerTrack as any).local_lyrics = finalLyrics;
+        }
+      }
+    } catch (e) {
+      console.error("Failed to upload lyrics:", e);
+    }
+  };
 
   useEffect(() => {
     if (playerTrack) {
@@ -810,8 +896,57 @@ function App() {
     );
   }
 
+  const handleUpdate = async () => {
+    if (!updateInfo) return;
+    try {
+      // Find the update again to get the update object
+      const update = await check();
+      if (update) {
+        console.log("Downloading and installing update...");
+        await update.downloadAndInstall();
+      }
+    } catch (e) {
+      console.error("Update failed:", e);
+    }
+  };
+
   return (
-    <div className="flex flex-col md:flex-row h-screen w-full bg-[#09090b] text-neutral-200 overflow-hidden font-sans">
+    <div className="flex flex-col md:flex-row h-screen w-full bg-[#050505] text-white overflow-hidden font-sans select-none relative main-container">
+      {/* Update Toast */}
+      <AnimatePresence>
+        {updateInfo && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            className="fixed bottom-24 right-8 z-[100] bg-zinc-900/40 backdrop-blur-3xl border border-[var(--color-neon-yellow)]/30 p-6 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] max-w-sm"
+          >
+            <div className="flex items-start gap-4">
+              <div className="bg-[var(--color-neon-yellow)]/10 p-3 rounded-2xl">
+                <Download className="text-[var(--color-neon-yellow)]" size={24} />
+              </div>
+              <div className="flex-1">
+                <h4 className="text-lg font-black text-white leading-tight">New Sonic Update!</h4>
+                <p className="text-sm text-neutral-400 mt-1">Version {updateInfo.version} is ready to drop.</p>
+                <div className="flex items-center gap-3 mt-4">
+                  <button
+                    onClick={handleUpdate}
+                    className="bg-[var(--color-neon-yellow)] text-black px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(219,255,0,0.3)]"
+                  >
+                    Install Now
+                  </button>
+                  <button
+                    onClick={() => setUpdateInfo(null)}
+                    className="text-neutral-500 hover:text-white text-xs font-bold px-2 py-1"
+                  >
+                    Later
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Silent audio to trigger browser media session */}
       <audio ref={silentAudioRef} loop muted style={{ display: 'none' }} src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=" />
       
@@ -1399,6 +1534,7 @@ function App() {
                   plainLyricsText={plainLyricsText}
                   lyricsOffsetMs={lyricsOffsetMs}
                   onOffsetChange={setLyricsOffsetMs}
+                  onUploadLyrics={handleUploadLyrics}
                 />
               </div>
             </div>
