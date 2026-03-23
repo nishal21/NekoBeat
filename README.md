@@ -32,6 +32,7 @@ Audiophile control, built directly into the stream. We bypassed standard browser
 
 - **Fine-Grain Control**: Sculpt your sound with 10 dedicated frequency bands ranging from 31Hz to 16kHz.
 - **Zero Latency**: Adjustments are made directly to the Rust audio pipeline for real-time, stutter-free tuning.
+- **Refined Master Volume**: Engineered with a sleek, vertical slider for maximum precision and an ultra-reactive hit area.
 
 ![NekoEQ Equalizer](assets/equalizer.png)
 
@@ -46,6 +47,12 @@ Tauri v2 allows NekoBeat to run natively on your phone, bringing desktop power t
 
 - **Framer Motion Gestures**: Buttery-smooth swipe-to-minimize and swipe-to-skip controls.
 - **System Integration**: Full support for iOS/Android background audio, wake locks, and lock-screen media controls.
+
+## 🎤 Custom Lyrics & Syncing
+Your music, your words.
+- **Manual Upload**: Upload your own `.lrc`, `.srt`, or `.vtt` subtitle files directly to any playing track.
+- **Auto-Conversion**: The engine automatically converts formatting into synchronized `.lrc` behind the scenes.
+- **Permanent Storage**: Uploaded lyrics are permanently stored in your local SQLite database or JSON registry, remaining synced to your tracks across app restarts.
 
 ![NekoBeat Player & Lyrics](assets/player_expanded.png)
 
@@ -69,7 +76,7 @@ Share your sonic aesthetic natively.
 To build NekoBeat locally, ensure you have the following installed:
 - Node.js (Latest LTS)
 - Rust & Cargo
-- GStreamer development libraries (for the audio engine)
+- GStreamer development libraries (for the audio engine - Note: The Windows release now bundles these dependencies for a fully portable standalone experience).
 - `yt-dlp` (must be accessible in your system PATH)
 
 ### Installation
