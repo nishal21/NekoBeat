@@ -28,6 +28,8 @@ Search and stream from **YouTube**, **SoundCloud**, and **Spotify** — all from
 
 ![NekoBrowse Search](assets/search.png)
 
+![NekoBrowse Search-2](assets/search2.png)
+
 ### Offline Library
 Every liked track is automatically cached to your local drive. Your library plays instantly with zero latency, regardless of internet connectivity.
 
@@ -46,17 +48,27 @@ Auto-fetched lyrics from Genius with manual `.lrc` / `.srt` / `.vtt` upload supp
 ### YouTube Video Sync
 When playing YouTube tracks, the music video auto-plays in an embedded window, synchronized with the audio stream.
 
+![Player, Lyrics & Video from YT](assets/yt-play.png)
+
 ### Discover (Listen Now)
 Live Last.fm scraping surfaces globally trending tracks. One click routes any discovery directly into the search engine.
 
+![NekoBeat Main Interface](assets/news.png)
+
 ### Discord Rich Presence
 Track titles, artists, remaining time, and album art broadcast to your Discord profile — handled entirely by the Rust backend.
+
+![Discord Rich Presence](assets/discord1.png)
+
+![Discord Rich Presence-2](assets/discord2.png)
 
 ### Auto-Updater
 In-app update checking with one-click install. Built on the Tauri updater plugin with signed releases.
 
 ### Media Session Integration
 Full Windows SMTC / macOS Now Playing integration with play, pause, next, previous, and seek controls.
+
+![Media-session](assets/smtp-windows.png)
 
 ## Architecture
 
@@ -128,9 +140,22 @@ nekobeat/
     └── publish-update.ps1  # Update manifest generator
 ```
 
+## Acknowledgments
+
+NekoBeat was built with inspiration and reference from these amazing open-source projects:
+
+- **[Harmonoid](https://github.com/harmonoid/harmonoid)** — Beautiful cross-platform music player built with Flutter. Influenced NekoBeat's UI/UX approach and local library management design.
+- **[Muffon](https://github.com/staniel359/muffon)** — Advanced multi-source music streaming & discovery client. Inspired the multi-source aggregation architecture.
+- **[Muffon API](https://github.com/staniel359/muffon-api)** — Backend API powering Muffon's multi-source integration. Referenced for source aggregation patterns.
+- **[SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC)** — Spotify to lossless FLAC downloader via Tidal/Amazon/Deezer fallback chain. Powers NekoBeat's Spotify playback pipeline.
+- **[Spotify Lyrics API](https://github.com/akashrchandran/spotify-lyrics-api)** — Lightweight API for fetching synced lyrics from Spotify. Used for real-time lyrics display.
+- **[MusicXMatch API](https://github.com/Fabrice-Music/musicxmatch-api)** — TypeScript wrapper for Musixmatch with automatic signature generation. Referenced for lyrics fetching.
+
+Thank you to all the developers and contributors behind these projects.
+
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ---
 
