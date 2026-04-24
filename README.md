@@ -65,6 +65,11 @@ Track titles, artists, remaining time, and album art broadcast to your Discord p
 ### Auto-Updater
 In-app update checking with one-click install. Built on the Tauri updater plugin with signed releases.
 
+### Picture-in-Picture Miniplayer
+Compact always-on-top floating player with album art, track info, and playback controls. Click anywhere to drag. One click to shrink, one click to expand back.
+
+![PiP Miniplayer](assets/pip.png)
+
 ### Media Session Integration
 Full Windows SMTC / macOS Now Playing integration with play, pause, next, previous, and seek controls.
 
