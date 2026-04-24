@@ -145,6 +145,8 @@ pub fn run() {
             audio::get_audio_position,
             audio::get_audio_duration,
             audio::stream_external_audio,
+            audio::set_volume,
+            audio::set_eq_band,
             aggregator::genius::get_genius_lyrics,
             aggregator::musixmatch::get_musixmatch_lyrics,
             aggregator::spotify_lyrics::get_spotify_lyrics,
@@ -158,7 +160,8 @@ pub fn run() {
             news::get_music_news,
             offline::update_track_lyrics,
             offline::read_text_file,
-            offline::convert_srt_vtt_to_lrc
+            offline::convert_srt_vtt_to_lrc,
+            offline::check_liked_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

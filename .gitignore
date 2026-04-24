@@ -26,6 +26,12 @@ Cargo.lock
 .vscode/*
 !.vscode/extensions.json
 
+# Updater signing keys (NEVER commit the private key!)
+.tauri/nekobeat.key
+latest.json
+
 # OS
 .DS_Store
 Thumbs.db
+
+

@@ -55,10 +55,11 @@ pub async fn scan_directory(path: String) -> Result<Vec<TrackData>, String> {
                     let existing_lyrics: Option<String> = stmt.query_row(params![track.filepath], |row| row.get(0)).ok();
                     track.local_lyrics = existing_lyrics;
 
-                    // Insert or ignore into DB
+                    // Insert or update DB entry with fresh metadata
                     let _ = conn.execute(
-                        "INSERT OR IGNORE INTO tracks (filepath, title, artist, album, duration_ms, local_lyrics)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        "INSERT INTO tracks (filepath, title, artist, album, duration_ms, local_lyrics)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                         ON CONFLICT(filepath) DO UPDATE SET title=?2, artist=?3, album=?4, duration_ms=?5",
                         params![
                             track.filepath,
                             track.title,
@@ -82,17 +83,27 @@ fn extract_metadata(path: &Path) -> Result<TrackData, String> {
     let probe_result = match Probe::open(path) {
         Ok(probe) => match probe.read() {
             Ok(res) => res,
-            Err(_) => return Err("Failed to read tagged file".into()),
+            Err(e) => {
+                eprintln!("Library: Failed to read tags for {:?}: {}", path, e);
+                return Err(format!("Failed to read tagged file: {}", e));
+            },
         },
-        Err(_) => return Err("Failed to open file".into()),
+        Err(e) => {
+            eprintln!("Library: Failed to open {:?}: {}", path, e);
+            return Err(format!("Failed to open file: {}", e));
+        },
     };
 
     let tag = probe_result.primary_tag().or_else(|| probe_result.first_tag());
+    let has_tag = tag.is_some();
     
-    let title = tag.and_then(|t| t.title().as_deref().map(|s| s.to_string())).unwrap_or_else(|| path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
-    let artist = tag.and_then(|t| t.artist().as_deref().map(|s| s.to_string())).unwrap_or_else(|| "Unknown Artist".into());
-    let album = tag.and_then(|t| t.album().as_deref().map(|s| s.to_string())).unwrap_or_else(|| "Unknown Album".into());
+    let title = tag.and_then(|t| t.title().as_deref().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
+    let artist = tag.and_then(|t| t.artist().as_deref().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown Artist".into());
+    let album = tag.and_then(|t| t.album().as_deref().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown Album".into());
     let duration_ms = probe_result.properties().duration().as_millis() as u64;
+
+    println!("Library: {:?} => has_tag={}, title='{}', artist='{}', duration={}ms", 
+        path.file_name().unwrap_or_default(), has_tag, title, artist, duration_ms);
 
     Ok(TrackData {
         filepath: path.to_string_lossy().into_owned(),
@@ -112,9 +123,21 @@ pub fn get_cached_tracks() -> Result<Vec<TrackData>, String> {
         .map_err(|e| e.to_string())?;
     
     let track_iter = stmt.query_map([], |row| {
+        let filepath: String = row.get(0)?;
+        let raw_title: String = row.get(1)?;
+        let title = if raw_title.trim().is_empty() {
+            // Fallback: use filename stem
+            std::path::Path::new(&filepath)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            raw_title
+        };
         Ok(TrackData {
-            filepath: row.get(0)?,
-            title: row.get(1)?,
+            filepath,
+            title,
             artist: row.get(2)?,
             album: row.get(3)?,
             duration_ms: row.get::<usize, i64>(4)? as u64,

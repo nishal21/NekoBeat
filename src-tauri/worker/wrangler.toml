@@ -1,0 +1,9 @@
+name = "nekobeat-sc-proxy"
+main = "soundcloud-proxy.js"
+compatibility_date = "2024-01-01"
+
+[placement]
+mode = "smart"
+
+# Hint: prefer US/EU workers for geo-bypass
+# Smart placement will route to the nearest Cloudflare node that can reach SoundCloud fastest

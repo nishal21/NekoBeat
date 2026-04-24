@@ -1,102 +1,143 @@
-# 🎧 NekoBeat
-**The Premium, Cross-Platform Music Aggregator.**
+<div align="center">
 
-<p align="center">
-  <img src="assets/logo.png" width="200" alt="NekoBeat Logo">
-</p>
+# NekoBeat
 
-## ✨ The NekoBeat Experience
-NekoBeat isn't just a wrapper for a website; it is a native, hardware-accelerated audio engine. By combining the safety of Rust, the fluidity of React, and the sheer routing power of GStreamer, NekoBeat delivers an audiophile-grade experience without the bloat of traditional Electron apps.
+**A native, cross-platform music aggregator built with Rust, React, and GStreamer.**
+
+<img src="assets/logo.png" width="160" alt="NekoBeat Logo">
+
+[![Tauri](https://img.shields.io/badge/Tauri_v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app)
+[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![React](https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black)](https://react.dev)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+[Download](https://github.com/nishal21/NekoBeat/releases/latest) | [Report Bug](https://github.com/nishal21/NekoBeat/issues)
+
+</div>
+
+---
+
+NekoBeat is not a wrapper for a website. It is a native, hardware-accelerated audio engine that combines Rust's safety, React's fluidity, and GStreamer's audio pipeline to deliver an audiophile-grade listening experience — without the bloat of Electron.
 
 ![NekoBeat Main Interface](assets/news.png)
 
-## 🔍 Universal Audio Aggregation (NekoBrowse)
-Stop jumping between apps. NekoBeat's core engine utilizes a custom yt-dlp backend to instantly resolve and stream high-quality audio from multiple sources.
+## Features
 
-- **The "Hero" Search**: A frictionless, perfectly centered search portal powered by Framer Motion.
-- **Multi-Source Power**: Seamlessly pivot your queries between YouTube and SoundCloud with a single click.
-- **Neon-Glass UI**: A stunning, hardware-accelerated frosted glass aesthetic.
+### Universal Search & Streaming
+Search and stream from **YouTube**, **SoundCloud**, and **Spotify** — all from one unified interface. NekoBeat resolves audio through a custom scraping engine with `yt-dlp` fallback for maximum reliability.
 
 ![NekoBrowse Search](assets/search.png)
 
-## 💾 Instant Offline Caching
-Your library belongs to you.
-
-- **Local Liked Songs**: Hitting the "Like" button automatically caches the track directly to your local hard drive.
-- **Zero-Latency Playback**: Your favorite songs play instantly, regardless of your internet connection or server status.
+### Offline Library
+Every liked track is automatically cached to your local drive. Your library plays instantly with zero latency, regardless of internet connectivity.
 
 ![Liked Songs Library](assets/liked.png)
 
-## 🎚️ Hardware-Level DSP (NekoEQ)
-Audiophile control, built directly into the stream. We bypassed standard browser audio APIs to integrate a 10-Band GStreamer Equalizer.
-
-- **Fine-Grain Control**: Sculpt your sound with 10 dedicated frequency bands ranging from 31Hz to 16kHz.
-- **Zero Latency**: Adjustments are made directly to the Rust audio pipeline for real-time, stutter-free tuning.
-- **Refined Master Volume**: Engineered with a sleek, vertical slider for maximum precision and an ultra-reactive hit area.
+### 10-Band Equalizer
+A GStreamer-powered equalizer integrated directly into the Rust audio pipeline. 10 frequency bands from 31 Hz to 16 kHz with real-time, stutter-free adjustment.
 
 ![NekoEQ Equalizer](assets/equalizer.png)
 
-## 📰 The Scraper Engine (Listen Now)
-Discover music without the forced algorithm.
+### Synchronized Lyrics
+Auto-fetched lyrics from Genius with manual `.lrc` / `.srt` / `.vtt` upload support. Per-track timing offset adjustment, multi-language rendering, and persistent storage across sessions.
 
-- **Live Last.fm Scraping**: NekoBeat silently pulls the latest global trending tracks and metadata.
-- **One-Click Routing**: See a trending track? Click it to instantly route the artist and title into the NekoBrowse aggregation engine.
+![Player & Lyrics](assets/player_expanded.png)
 
-## 📱 Native Mobile Fluidity (iOS & Android)
-Tauri v2 allows NekoBeat to run natively on your phone, bringing desktop power to your pocket.
+### YouTube Video Sync
+When playing YouTube tracks, the music video auto-plays in an embedded window, synchronized with the audio stream.
 
-- **Framer Motion Gestures**: Buttery-smooth swipe-to-minimize and swipe-to-skip controls.
-- **System Integration**: Full support for iOS/Android background audio, wake locks, and lock-screen media controls.
+### Discover (Listen Now)
+Live Last.fm scraping surfaces globally trending tracks. One click routes any discovery directly into the search engine.
 
-## 🎤 Custom Lyrics & Syncing
-Your music, your words.
-- **Manual Upload**: Upload your own `.lrc`, `.srt`, or `.vtt` subtitle files directly to any playing track.
-- **Auto-Conversion**: The engine automatically converts formatting into synchronized `.lrc` behind the scenes.
-- **Permanent Storage**: Uploaded lyrics are permanently stored in your local SQLite database or JSON registry, remaining synced to your tracks across app restarts.
+### Discord Rich Presence
+Track titles, artists, remaining time, and album art broadcast to your Discord profile — handled entirely by the Rust backend.
 
-![NekoBeat Player & Lyrics](assets/player_expanded.png)
+### Auto-Updater
+In-app update checking with one-click install. Built on the Tauri updater plugin with signed releases.
 
-## 🎮 Discord Rich Presence
-Share your sonic aesthetic natively.
+### Media Session Integration
+Full Windows SMTC / macOS Now Playing integration with play, pause, next, previous, and seek controls.
 
-- **Zero-Bloat Integration**: Handled entirely by the Rust backend.
-- **Live Sync**: Broadcasts track titles, artists, remaining time, and high-res album art directly to your Discord profile.
+## Architecture
 
-## 🛠️ The Architecture
-- **Core**: Rust
-- **App Framework**: Tauri v2
-- **Frontend**: React + TypeScript
-- **Styling**: Tailwind CSS
-- **Animations**: Framer Motion
-- **Audio Pipeline**: GStreamer + yt-dlp
+| Layer | Technology |
+|-------|-----------|
+| **Core** | Rust |
+| **Framework** | Tauri v2 |
+| **Frontend** | React + TypeScript |
+| **Styling** | Tailwind CSS |
+| **Animations** | Framer Motion |
+| **Audio Engine** | GStreamer |
+| **Stream Resolution** | Custom scraping + yt-dlp fallback |
+| **Database** | SQLite (via rusqlite) |
+| **Lyrics** | Genius API scraping |
 
-## 🚀 Getting Started
+## Installation
 
-### Prerequisites
-To build NekoBeat locally, ensure you have the following installed:
-- Node.js (Latest LTS)
-- Rust & Cargo
-- GStreamer development libraries (for the audio engine - Note: The Windows release now bundles these dependencies for a fully portable standalone experience).
-- `yt-dlp` (must be accessible in your system PATH)
+### Download
 
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/nishal21/NekoBeat.git
-   cd NekoBeat
-   ```
-2. Install frontend dependencies:
-   ```bash
-   npm install
-   ```
-3. Fire up the development server:
-   ```bash
-   npm run tauri dev
-   ```
+Grab the latest release from the [Releases](https://github.com/nishal21/NekoBeat/releases/latest) page.
 
-<p align="center">
-Made with ❤️ by Nishal
+- **Windows**: `NekoBeat_x64-setup.exe` (recommended) or `.msi`
 
-<br>
-<i>"Music is the wine that fills the cup of silence."</i>
-</p>
+> The Windows installer bundles all dependencies including GStreamer — no manual setup required.
+
+### Build from Source
+
+**Prerequisites:**
+- [Node.js](https://nodejs.org/) (LTS)
+- [Rust](https://www.rust-lang.org/tools/install)
+- [GStreamer](https://gstreamer.freedesktop.org/download/) development libraries
+- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) in your system PATH
+
+```bash
+git clone https://github.com/nishal21/NekoBeat.git
+cd NekoBeat
+npm install
+npm run tauri dev
+```
+
+### Build a Release
+
+```bash
+# Build signed installer (Windows)
+.\scripts\build-release.ps1
+```
+
+This produces signed `.exe` and `.msi` installers with `.sig` files for the auto-updater.
+
+## Project Structure
+
+```
+nekobeat/
+├── src/                    # React frontend
+│   ├── App.tsx             # Main application
+│   └── hooks.ts            # Custom React hooks
+├── src-tauri/
+│   ├── src/
+│   │   ├── main.rs         # Entry point & GStreamer init
+│   │   ├── lib.rs          # Tauri command registration
+│   │   ├── audio.rs        # GStreamer playback engine
+│   │   ├── aggregator/     # Search, resolve, Spotify, SoundCloud
+│   │   ├── offline.rs      # Local caching & liked songs
+│   │   └── library.rs      # SQLite database operations
+│   ├── gstreamer/          # Bundled GStreamer runtime
+│   └── binaries/           # External tools (spotiflac-cli)
+└── scripts/
+    ├── build-release.ps1   # Signed release builder
+    └── publish-update.ps1  # Update manifest generator
+```
+
+## License
+
+MIT
+
+---
+
+<div align="center">
+
+Made with care by [Nishal](https://github.com/nishal21)
+
+*"Music is the wine that fills the cup of silence."*
+
+</div>

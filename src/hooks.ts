@@ -163,7 +163,7 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
                     setPositionMs(0);
                     setDurationMs(0);
                     setIsBuffering(false);
-                    return;
+                    return liked.local_audio_path;
                 }
             }
             
@@ -342,20 +342,58 @@ export type AggregatedTrack = {
 export function useAggregatorSearch() {
     const [results, setResults] = useState<AggregatedTrack[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(true);
+    const pageRef = useRef(0);
+    const lastQueryRef = useRef('');
+    const lastSourceRef = useRef('youtube');
+
+    const fetchPage = async (query: string, source: string, page: number): Promise<AggregatedTrack[]> => {
+        if (source === 'all') {
+            const [ytResults, scResults, spResults] = await Promise.allSettled([
+                invoke<AggregatedTrack[]>('search_external', { query, source: 'youtube', page }),
+                invoke<AggregatedTrack[]>('search_external', { query, source: 'soundcloud', page }),
+                invoke<AggregatedTrack[]>('search_external', { query, source: 'spotify', page }),
+            ]);
+
+            const yt = ytResults.status === 'fulfilled' ? ytResults.value : [];
+            const sc = scResults.status === 'fulfilled' ? scResults.value : [];
+            const sp = spResults.status === 'fulfilled' ? spResults.value : [];
+
+            // Interleave results: 2 YouTube, 1 SoundCloud, 1 Spotify, repeat
+            const merged: AggregatedTrack[] = [];
+            let yi = 0, si = 0, pi = 0;
+            while (yi < yt.length || si < sc.length || pi < sp.length) {
+                if (yi < yt.length) merged.push(yt[yi++]);
+                if (yi < yt.length) merged.push(yt[yi++]);
+                if (si < sc.length) merged.push(sc[si++]);
+                if (pi < sp.length) merged.push(sp[pi++]);
+            }
+            return merged;
+        } else {
+            return await invoke<AggregatedTrack[]>('search_external', { query, source, page });
+        }
+    };
 
     const search = async (query: string, source: string = 'youtube') => {
         if (!query.trim()) {
             setResults([]);
+            setHasMore(true);
             return;
         }
 
+        pageRef.current = 0;
+        lastQueryRef.current = query;
+        lastSourceRef.current = source;
         setIsLoading(true);
         setError(null);
+        setHasMore(true);
 
         try {
-            const results = await invoke<AggregatedTrack[]>('search_external', { query, source });
-            setResults(results);
+            const newResults = await fetchPage(query, source, 0);
+            setResults(newResults);
+            if (newResults.length === 0) setHasMore(false);
         } catch (e) {
             setError("Failed to fetch results from external sources.");
             console.error(e);
@@ -364,7 +402,33 @@ export function useAggregatorSearch() {
         }
     };
 
-    return { results, isLoading, error, search };
+    const loadMore = async () => {
+        if (isLoadingMore || !hasMore || !lastQueryRef.current) return;
+        
+        setIsLoadingMore(true);
+        pageRef.current += 1;
+
+        try {
+            const newResults = await fetchPage(lastQueryRef.current, lastSourceRef.current, pageRef.current);
+            if (newResults.length === 0) {
+                setHasMore(false);
+            } else {
+                // Deduplicate by ID before appending
+                setResults(prev => {
+                    const existingIds = new Set(prev.map(t => t.id));
+                    const unique = newResults.filter(t => !existingIds.has(t.id));
+                    if (unique.length === 0) setHasMore(false);
+                    return [...prev, ...unique];
+                });
+            }
+        } catch (e) {
+            console.error("Failed to load more results:", e);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
+
+    return { results, isLoading, isLoadingMore, hasMore, error, search, loadMore };
 }
 
 export type TrackData = {
@@ -466,6 +530,17 @@ export function useLikedLibrary() {
         const trackId = track.id || track.stream_url;
         if (!trackId) return;
 
+        // Build a canonical source URL from the track ID (not the resolved stream URL which may be a temporary googlevideo.com link)
+        const id = track.id || '';
+        let canonicalUrl = track.stream_url;
+        if (track.source === 'youtube' || id.startsWith('yt-')) {
+            canonicalUrl = `https://www.youtube.com/watch?v=${id.replace('yt-', '')}`;
+        } else if (track.source === 'soundcloud' || id.startsWith('sc-')) {
+            canonicalUrl = `https://api-v2.soundcloud.com/tracks/${id.replace('sc-', '')}`;
+        } else if (track.source === 'spotify' || id.startsWith('sp-')) {
+            canonicalUrl = `https://open.spotify.com/track/${id.replace('sp-', '')}`;
+        }
+
         setIsLiking(prev => ({ ...prev, [trackId]: true }));
         try {
             await invoke<boolean>('toggle_like', { 
@@ -477,7 +552,7 @@ export function useLikedLibrary() {
                     duration_ms: track.duration_ms || 0,
                     artwork_url: track.artwork_url || "",
                     source: track.source || "external",
-                    stream_url: track.stream_url
+                    stream_url: canonicalUrl
                 },
                 lyrics: currentLyrics || null
             });

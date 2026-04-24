@@ -5,10 +5,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         use std::env;
-        use std::path::PathBuf;
         use std::os::windows::ffi::OsStrExt;
-        use std::ptr;
-        use std::panic;
 
         extern "system" {
             fn SetDefaultDllDirectories(DirectoryFlags: u32) -> i32;

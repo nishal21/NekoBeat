@@ -35,7 +35,7 @@ pub async fn resolve_spotify_url(app: &AppHandle, url: &str) -> Result<String, S
         if let Some(true) = parsed["success"].as_bool() {
             if let Some(file_path) = parsed["file"].as_str() {
                 // Ensure it's treated as a local file scheme
-                return Ok(format!("file://{}", file_path.replace("\\", "/")));
+                return Ok(format!("file:///{}", file_path.replace("\\", "/")));
             }
         } else if let Some(true) = parsed["fallback"].as_bool() {
             if let Some(query) = parsed["fallback_query"].as_str() {

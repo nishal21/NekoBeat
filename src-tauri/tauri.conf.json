@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "nekobeat",
-  "version": "0.1.0",
-  "identifier": "com.user.nekobeat",
+  "productName": "NekoBeat",
+  "version": "0.2.0",
+  "identifier": "com.nishal21.nekobeat",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -24,8 +24,10 @@
     "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": [
-      "gstreamer/**/*"
+      "gstreamer/**/*",
+      "bin/yt-dlp.exe"
     ],
     "externalBin": [
       "binaries/spotiflac-cli"
@@ -36,14 +38,19 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/nishal21/NekoBeat/releases/latest/download/latest.json"
+        "https://gist.githubusercontent.com/nishal21/9e13884354b4b3c11dac82a7356b81dd/raw/ab394352fba9acf565932f092f10dd79b538d568/latest.json"
       ],
-      "pubkey": "dW5rbm93biBwdWJsaWMga2V5Cg==",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNEM0RDMjE2RkI1QkM5QzUKUldURnlWdjdGc0k5UFh4cXNSSlZvdGM5dTcyaEdsY0hQZlZPMGFHZEF6U2YzdGhTbTkvQzUxbzkK",
       "windows": {
         "installMode": "passive"
       }

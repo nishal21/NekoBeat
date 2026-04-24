@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, memo } from "react";
-import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download } from "lucide-react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download, MonitorPlay } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, EQ_PRESETS } from "./hooks";
 // Used for interacting with system dialogs in Tauri
@@ -8,6 +8,44 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
 import { check } from "@tauri-apps/plugin-updater";
 import logoImg from "./assets/logo.png";
+
+// Hook for mouse-drag horizontal scrolling on non-touch devices
+function useDragScroll() {
+  const ref = useRef<HTMLDivElement>(null);
+  const state = useRef({ isDown: false, startX: 0, scrollLeft: 0 });
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    const el = ref.current;
+    if (!el) return;
+    state.current = { isDown: true, startX: e.pageX - el.offsetLeft, scrollLeft: el.scrollLeft };
+    el.style.cursor = 'grabbing';
+    el.style.userSelect = 'none';
+  }, []);
+
+  const onMouseUp = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    state.current.isDown = false;
+    el.style.cursor = 'grab';
+    el.style.userSelect = '';
+  }, []);
+
+  const onMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!state.current.isDown || !ref.current) return;
+    e.preventDefault();
+    const x = e.pageX - ref.current.offsetLeft;
+    ref.current.scrollLeft = state.current.scrollLeft - (x - state.current.startX);
+  }, []);
+
+  const onMouseLeave = useCallback(() => {
+    if (!ref.current) return;
+    state.current.isDown = false;
+    ref.current.style.cursor = 'grab';
+    ref.current.style.userSelect = '';
+  }, []);
+
+  return { ref, onMouseDown, onMouseUp, onMouseMove, onMouseLeave };
+}
 
 // Provide a stable time formatter outside of renders
 const formatTime = (ms: number) => {
@@ -126,7 +164,7 @@ const LyricsDisplay = memo(({ parsedLyrics, activeLyricIndex, hasPlainLyrics, pl
                 className={`px-2 py-1 transition-all duration-500 ease-out origin-left will-change-[transform,opacity]
                   ${isActive ? 'scale-105 opacity-100' : 'scale-100 opacity-20'}`}
               >
-                <p className={`text-2xl md:text-5xl font-display font-black tracking-tight leading-tight transition-colors duration-500
+                <p className={`text-2xl md:text-5xl font-lyrics font-black tracking-tight leading-tight transition-colors duration-500
                   ${isActive ? 'liquid-neon-text' : 'text-white'}`}>
                   {line.text}
                 </p>
@@ -139,7 +177,7 @@ const LyricsDisplay = memo(({ parsedLyrics, activeLyricIndex, hasPlainLyrics, pl
           <p className="text-sm font-bold text-[var(--color-neon-yellow)] tracking-widest uppercase mb-4 opacity-80">Unsynchronized Lyrics</p>
           {plainLyricsText.split('\n').map((line, ix) => (
             <div key={ix} className="px-2 py-1">
-              <p className={`text-2xl md:text-4xl font-display font-bold tracking-tight leading-tight text-white/80`}>
+              <p className={`text-2xl md:text-4xl font-lyrics font-bold tracking-tight leading-tight text-white/80`}>
                 {line || "\u00A0"}
               </p>
             </div>
@@ -185,6 +223,8 @@ interface NewsTrack {
 
 const Equalizer = memo(() => {
   const { gains, updateGain, applyPreset } = useEqualizer();
+  const presetScroll = useDragScroll();
+  const sliderScroll = useDragScroll();
   const bands = [
     { label: '31Hz', sub: 'Bass' },
     { label: '62Hz', sub: 'Bass' },
@@ -206,7 +246,15 @@ const Equalizer = memo(() => {
           10-Band EQ
         </h3>
         
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 -mx-2 px-2 scroll-smooth mask-fade-x touch-pan-x">
+        <div
+          ref={presetScroll.ref}
+          onMouseDown={presetScroll.onMouseDown}
+          onMouseUp={presetScroll.onMouseUp}
+          onMouseMove={presetScroll.onMouseMove}
+          onMouseLeave={presetScroll.onMouseLeave}
+          className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 -mx-2 px-2 scroll-smooth mask-fade-x touch-pan-x"
+          style={{ cursor: 'grab' }}
+        >
           {Object.entries(EQ_PRESETS).map(([name, presetGains]) => {
             const isActive = JSON.stringify(gains) === JSON.stringify(presetGains);
             return (
@@ -226,7 +274,15 @@ const Equalizer = memo(() => {
         </div>
       </div>
 
-      <div className="flex items-end h-72 gap-4 md:gap-5 overflow-x-auto no-scrollbar pb-6 md:justify-between snap-x relative mask-fade-x touch-pan-x">
+      <div
+        ref={sliderScroll.ref}
+        onMouseDown={sliderScroll.onMouseDown}
+        onMouseUp={sliderScroll.onMouseUp}
+        onMouseMove={sliderScroll.onMouseMove}
+        onMouseLeave={sliderScroll.onMouseLeave}
+        className="flex items-end h-72 gap-4 md:gap-5 overflow-x-auto no-scrollbar pb-6 md:justify-between snap-x relative mask-fade-x touch-pan-x"
+        style={{ cursor: 'grab' }}
+      >
         {bands.map((band, i) => (
           <div key={band.label} className="flex flex-col items-center gap-5 flex-none md:flex-1 min-w-[70px] md:min-w-0 snap-center">
             <div className="relative h-44 w-4 md:w-2 bg-zinc-800/50 rounded-full overflow-hidden group">
@@ -369,12 +425,29 @@ function App() {
   const onPrevRef = useRef<any>(null);
 
   const [showMobileLyrics, setShowMobileLyrics] = useState(false);
+  const [videoMode, setVideoMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('nekobeat_video_mode');
+    return saved ? JSON.parse(saved) : false;
+  });
 
   const { tracks, isScanning, scanDirectory } = useLibrary();
-  const { results: searchResults, isLoading: isSearching, search: performSearch } = useAggregatorSearch();
+  const { results: searchResults, isLoading: isSearching, isLoadingMore, hasMore, search: performSearch, loadMore } = useAggregatorSearch();
   const { likedTracks, isLiking, toggleLike } = useLikedLibrary();
 
   const handleNextTrackRef = useRef<(() => void) | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+
+  // Infinite scroll: auto-load more when sentinel becomes visible
+  useEffect(() => {
+    const el = loadMoreSentinelRef.current;
+    if (!el || !hasMore || isLoadingMore) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { rootMargin: '600px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [searchResults.length, hasMore, isLoadingMore]);
 
   // Audio player state and actions
   const {
@@ -401,10 +474,11 @@ function App() {
   const [lyricsData, setLyricsData] = useState<LyricsData | null>(null);
   const [parsedLyrics, setParsedLyrics] = useState<{ timeMs: number, text: string }[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchSource, setSearchSource] = useState<'youtube' | 'soundcloud' | 'bandcamp' | 'vk' | 'yandex'>('youtube');
+  const [searchSource, setSearchSource] = useState<'all' | 'youtube' | 'soundcloud' | 'spotify' | 'bandcamp' | 'vk' | 'yandex'>('all');
   const [activeSources, setActiveSources] = useState({
     youtube: true,
-    soundcloud: true
+    soundcloud: true,
+    spotify: true
   });
   const [activeTab, setActiveTab] = useState<'listen' | 'browse' | 'library' | 'settings' | 'liked'>('library');
   const [autoLoopLiked, setAutoLoopLiked] = useState<boolean>(() => {
@@ -417,6 +491,7 @@ function App() {
   });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ version: string, date?: string, body?: string } | null>(null);
+  const [streamError, setStreamError] = useState<{ message: string, trackTitle?: string, trackArtist?: string, source?: string, previewUrl?: string } | null>(null);
 
   // Auto-Updater Check
   useEffect(() => {
@@ -448,6 +523,19 @@ function App() {
     localStorage.setItem('nekobeat_view_mode', viewMode);
   }, [viewMode]);
 
+  useEffect(() => {
+    localStorage.setItem('nekobeat_video_mode', JSON.stringify(videoMode));
+  }, [videoMode]);
+
+  // Extract YouTube video ID from the current track (if applicable)
+  const getYouTubeVideoId = (track: any): string | null => {
+    if (!track) return null;
+    if (track.source === 'youtube' && track.id) {
+      return track.id.replace('yt-', '');
+    }
+    return null;
+  };
+
   const currentTrack = tracks.find(t => t.filepath === currentTrackPath);
 
   // Helper to get track info for player
@@ -457,6 +545,19 @@ function App() {
     // it must be the one we're currently streaming. This is more resilient than path string matching.
     playerTrack = externalTrack;
   }
+
+  // Per-track lyrics offset persistence
+  const handleLyricsOffsetChange = useCallback((offset: number) => {
+    setLyricsOffsetMs(offset);
+    const key = playerTrack?.id || playerTrack?.filepath || currentTrackPath;
+    if (key) {
+      try {
+        const stored = JSON.parse(localStorage.getItem('nekobeat_lyrics_offsets') || '{}');
+        stored[key] = offset;
+        localStorage.setItem('nekobeat_lyrics_offsets', JSON.stringify(stored));
+      } catch { }
+    }
+  }, [playerTrack?.id, playerTrack?.filepath, currentTrackPath]);
 
   // Sync active track to Discord Rich Presence
   useEffect(() => {
@@ -534,7 +635,55 @@ function App() {
   };
 
   const handleStreamExternalAudio = async (track: any, context: 'search' | 'liked' = 'search') => {
-    const playbackUrl = track.stream_url || track.id;
+    // For liked tracks, check if we have a local download first
+    let localPath = track.local_audio_path;
+    
+    // If no local_audio_path in metadata, check disk cache
+    if (context === 'liked' && !localPath && track.id) {
+      try {
+        const cached = await invoke<string | null>('check_liked_cache', { trackId: track.id });
+        if (cached) {
+          localPath = cached;
+          console.log("Offline: Found cached file on disk:", cached);
+        }
+      } catch (e) {
+        console.error("Failed to check liked cache:", e);
+      }
+    }
+    
+    if (context === 'liked' && localPath) {
+      setExternalTrack({
+        ...track,
+        title: track.title || 'Unknown Title',
+        artist: track.artist || 'Unknown Artist',
+        artwork_url: track.artwork_url || `https://picsum.photos/seed/${track.title || 'default'}/200`,
+        album: track.album || '',
+        duration_ms: track.duration_ms || 0,
+        source: track.source || 'external',
+        stream_url: localPath,
+        playbackContext: context
+      });
+      try {
+        await playTrack(localPath);
+        setStreamError(null);
+        return;
+      } catch (e) {
+        console.error("Failed to play local liked track, falling back to stream:", e);
+      }
+    }
+
+    // Reconstruct a proper source URL from the track ID if stream_url is missing or stale
+    let playbackUrl = track.stream_url || track.id;
+    if (context === 'liked' || !playbackUrl.startsWith('http')) {
+      const id = track.id || '';
+      if (track.source === 'youtube' || id.startsWith('yt-')) {
+        playbackUrl = `https://www.youtube.com/watch?v=${id.replace('yt-', '')}`;
+      } else if (track.source === 'soundcloud' || id.startsWith('sc-')) {
+        playbackUrl = `https://api-v2.soundcloud.com/tracks/${id.replace('sc-', '')}`;
+      } else if (track.source === 'spotify' || id.startsWith('sp-')) {
+        playbackUrl = `https://open.spotify.com/track/${id.replace('sp-', '')}`;
+      }
+    }
     setExternalTrack({
       ...track,
       title: track.title || 'Unknown Title',
@@ -548,7 +697,38 @@ function App() {
     });
     const resolvedUrl = await streamExternalAudio(playbackUrl, track.source, track.id);
     if (resolvedUrl) {
-      setExternalTrack((prev: any) => prev ? { ...prev, stream_url: resolvedUrl } : null);
+      const isPreview = resolvedUrl.startsWith('PREVIEW:');
+      const actualUrl = isPreview ? resolvedUrl.replace('PREVIEW:', '') : resolvedUrl;
+      setExternalTrack((prev: any) => prev ? { ...prev, stream_url: actualUrl } : null);
+      
+      if (isPreview) {
+        // Track is playing but it's only a 30s preview
+        const trackTitle = track.title || 'Unknown Track';
+        const trackArtist = track.artist || 'Unknown Artist';
+        setStreamError({
+          message: `"${trackTitle}" is blocked by the distributor on SoundCloud. Playing 30-second preview.`,
+          trackTitle,
+          trackArtist,
+          source: track.source,
+          previewUrl: actualUrl
+        });
+        setTimeout(() => setStreamError(null), 15000);
+      } else {
+        setStreamError(null);
+      }
+    } else {
+      // Stream completely failed
+      const trackTitle = track.title || 'Unknown Track';
+      const trackArtist = track.artist || 'Unknown Artist';
+      setStreamError({
+        message: track.source === 'soundcloud' 
+          ? `"${trackTitle}" is blocked by the distributor on SoundCloud. The track is not available.`
+          : `Failed to stream "${trackTitle}". The track may be unavailable.`,
+        trackTitle,
+        trackArtist,
+        source: track.source
+      });
+      setTimeout(() => setStreamError(null), 12000);
     }
   };
 
@@ -556,6 +736,16 @@ function App() {
   const handlePlayLocalTrack = (filepath: string) => {
     setExternalTrack(null);
     playTrack(filepath);
+  };
+
+  // Helper to get playback URL for an external track
+  const getTrackPlaybackUrl = (track: any) => {
+    return track.stream_url || (
+      track.source === 'youtube' ? `https://www.youtube.com/watch?v=${track.id.replace('yt-', '')}` :
+        track.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${track.id.replace('sc-', '')}` :
+          track.source === 'spotify' ? `https://open.spotify.com/track/${track.id.replace('sp-', '')}` :
+            track.id
+    );
   };
 
   // Unified next/prev for both local and external tracks
@@ -569,24 +759,12 @@ function App() {
         const nextIdx = currentIdx + 1;
         if (nextIdx < playlist.length) {
           const next: any = playlist[nextIdx];
-          const url = next.stream_url || (
-            next.source === 'youtube' ? `https://www.youtube.com/watch?v=${next.id.replace('yt-', '')}` :
-              next.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${next.id.replace('sc-', '')}` :
-                next.source === 'spotify' ? `https://open.spotify.com/track/${next.id.replace('sp-', '')}` :
-                  next.id
-          );
-          handleStreamExternalAudio({...next, stream_url: url}, externalTrack.playbackContext);
+          handleStreamExternalAudio({...next, stream_url: getTrackPlaybackUrl(next)}, externalTrack.playbackContext);
           setCoverArt(next.artwork_url);
         } else if (autoLoopLiked && isLikedContext && playlist.length > 1) {
           // Loop back to the first song if at the end of Liked Songs
           const first: any = playlist[0];
-          const url = first.stream_url || (
-            first.source === 'youtube' ? `https://www.youtube.com/watch?v=${first.id.replace('yt-', '')}` :
-              first.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${first.id.replace('sc-', '')}` :
-                first.source === 'spotify' ? `https://open.spotify.com/track/${first.id.replace('sp-', '')}` :
-                  first.id
-          );
-          handleStreamExternalAudio({...first, stream_url: url}, 'liked');
+          handleStreamExternalAudio({...first, stream_url: getTrackPlaybackUrl(first)}, 'liked');
           setCoverArt(first.artwork_url);
         }
       } else {
@@ -611,13 +789,7 @@ function App() {
         const prevIdx = currentIdx - 1;
         if (prevIdx >= 0) {
           const prev: any = playlist[prevIdx];
-          const url = prev.stream_url || (
-            prev.source === 'youtube' ? `https://www.youtube.com/watch?v=${prev.id.replace('yt-', '')}` :
-              prev.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${prev.id.replace('sc-', '')}` :
-                prev.source === 'spotify' ? `https://open.spotify.com/track/${prev.id.replace('sp-', '')}` :
-                  prev.id
-          );
-          handleStreamExternalAudio({...prev, stream_url: url}, externalTrack.playbackContext);
+          handleStreamExternalAudio({...prev, stream_url: getTrackPlaybackUrl(prev)}, externalTrack.playbackContext);
           setCoverArt(prev.artwork_url);
         }
       } else {
@@ -679,13 +851,14 @@ function App() {
   };
 
   useEffect(() => {
+    let stale = false;
     if (playerTrack) {
       // Set initial/cached artwork immediately
       setCoverArt(playerTrack.artwork_url || `https://picsum.photos/seed/${playerTrack.title}/200`);
 
       // Fetch high-res artwork
       fetchAlbumArt(playerTrack.title, playerTrack.artist).then(url => {
-        if (url) setCoverArt(url);
+        if (!stale && url) setCoverArt(url);
       });
 
       // Fetch lyrics
@@ -703,8 +876,18 @@ function App() {
       invoke('log_frontend', { msg: `App.tsx: Evaluating playerTrack for lyrics. source=${playerTrack.source}, raw_id=${playerTrack.id}, extracted_spotifyId=${spotifyId}` }).catch(() => { });
 
       fetchLyrics(playerTrack.title, playerTrack.artist, playerTrack.album, durationMs || playerTrack.duration_ms, spotifyId).then(data => {
+        if (stale) return; // Track changed while fetching — discard stale result
         setLyricsData(data);
-        setLyricsOffsetMs(0); // Reset offset
+        // Restore per-track lyrics offset (or default to 0)
+        const trackKey = playerTrack.id || playerTrack.filepath || currentTrackPath;
+        let savedOffset = 0;
+        if (trackKey) {
+          try {
+            const stored = JSON.parse(localStorage.getItem('nekobeat_lyrics_offsets') || '{}');
+            if (typeof stored[trackKey] === 'number') savedOffset = stored[trackKey];
+          } catch { }
+        }
+        setLyricsOffsetMs(savedOffset);
         
         const localIsSynced = playerTrack.local_lyrics && playerTrack.local_lyrics.trim().startsWith('[');
         
@@ -721,6 +904,7 @@ function App() {
       setLyricsData(null);
       setParsedLyrics([]);
     }
+    return () => { stale = true; };
   }, [playerTrack?.id, playerTrack?.filepath, currentTrackPath]);
 
   // Sync with System Media Session (Lock Screen / Notifications)
@@ -740,8 +924,13 @@ function App() {
           ]
         });
 
+        // Update window title so Windows SMTC shows "NekoBeat" as app name
+        document.title = `${stripExtension(playerTrack.title)} - ${playerTrack.artist} | NekoBeat`;
+
         // Wake up the Media Session with a silent audio clip
+        // Volume must be > 0 and not muted for Windows SMTC to register
         if (silentAudioRef.current) {
+          silentAudioRef.current.volume = 0.01;
           if (isPlaying) {
             silentAudioRef.current.play()
               .then(() => invoke('log_frontend', { msg: `MediaSession: Silent audio playing. Metadata set for: ${playerTrack.title}` }))
@@ -793,11 +982,101 @@ function App() {
     }
   }, [activeLyricIndex, isExpanded]);
 
+  // Keep a ref with the latest positionMs so async callbacks get the current value
+  const positionMsRef = useRef(positionMs);
+  useEffect(() => { positionMsRef.current = positionMs; }, [positionMs]);
+
+  // Helper to send commands to the YouTube iframe
+  const sendYTCommand = (func: string, args: any[] = []) => {
+    const iframe = (window as any).__nekobeat_yt_iframe as HTMLIFrameElement | undefined;
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
+  };
+
+  // Sync YouTube iframe video — only on seek or pause/play, NOT periodically
+  const ytLastSyncRef = useRef<number>(0);
+  useEffect(() => {
+    if (!videoMode || !isExpanded || !playerTrack) return;
+    if (!getYouTubeVideoId(playerTrack)) return;
+
+    // Only sync when forced (seek sets ytLastSyncRef to -999)
+    if (ytLastSyncRef.current === -999) {
+      const currentSec = Math.floor(positionMs / 1000);
+      ytLastSyncRef.current = currentSec;
+      sendYTCommand('seekTo', [currentSec, true]);
+    }
+  }, [positionMs, videoMode, isExpanded, playerTrack]);
+
+  // Pause/play the YouTube video when audio state changes
+  useEffect(() => {
+    if (!videoMode || !isExpanded || !playerTrack) return;
+    if (!getYouTubeVideoId(playerTrack)) return;
+    sendYTCommand(isPlaying ? 'playVideo' : 'pauseVideo');
+  }, [isPlaying, videoMode, isExpanded, playerTrack]);
+
+  // One-time initial sync when YT iframe becomes ready after track change
+  useEffect(() => {
+    if (!videoMode || !isExpanded || !playerTrack) return;
+    if (!getYouTubeVideoId(playerTrack)) return;
+
+    let cleaned = false;
+    let synced = false;
+
+    const doSync = () => {
+      if (cleaned || synced) return;
+      synced = true;
+      const sec = Math.floor(positionMsRef.current / 1000);
+      sendYTCommand('seekTo', [sec, true]);
+      // Only send play once — the iframe autoplay=1 handles most cases
+      if (isPlaying) sendYTCommand('playVideo');
+    };
+
+    // Listen for YT iframe ready event
+    const onMessage = (e: MessageEvent) => {
+      if (cleaned || synced) return;
+      try {
+        const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (data?.event === 'onReady' || data?.event === 'initialDelivery' || data?.info?.playerState !== undefined) {
+          doSync();
+        }
+      } catch { }
+    };
+    window.addEventListener('message', onMessage);
+
+    // Enable iframe API event listening
+    const iframe = (window as any).__nekobeat_yt_iframe as HTMLIFrameElement | undefined;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), '*');
+    }
+
+    // Single fallback: if no message arrives within 2s, sync once
+    const fallback = setTimeout(() => { doSync(); }, 2000);
+
+    return () => {
+      cleaned = true;
+      window.removeEventListener('message', onMessage);
+      clearTimeout(fallback);
+    };
+  }, [videoMode, isExpanded, playerTrack?.id]);
+
+  // Periodic drift correction: only seekTo (no play/pause commands to avoid icon flash)
+  useEffect(() => {
+    if (!videoMode || !isExpanded || !playerTrack || !isPlaying) return;
+    if (!getYouTubeVideoId(playerTrack)) return;
+    const interval = setInterval(() => {
+      const sec = Math.floor(positionMsRef.current / 1000);
+      sendYTCommand('seekTo', [sec, true]);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [videoMode, isExpanded, playerTrack?.id, isPlaying]);
+
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!playerTrack) return;
     const bounds = e.currentTarget.getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - bounds.left) / bounds.width));
     seek(Math.floor(percent * (durationMs || playerTrack.duration_ms)));
+    // Force video resync after seek
+    ytLastSyncRef.current = -999;
   };
 
   const handleScanClick = async () => {
@@ -947,8 +1226,59 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      {/* Stream Error / Preview Toast */}
+      <AnimatePresence>
+        {streamError && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            className={`fixed bottom-24 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-8 z-[100] backdrop-blur-3xl p-5 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] max-w-sm w-[90vw] md:w-auto ${
+              streamError.previewUrl 
+                ? 'bg-amber-950/60 border border-amber-500/30' 
+                : 'bg-red-950/60 border border-red-500/30'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${streamError.previewUrl ? 'bg-amber-500/10' : 'bg-red-500/10'}`}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={streamError.previewUrl ? 'text-amber-400' : 'text-red-400'}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className={`text-sm font-bold leading-tight ${streamError.previewUrl ? 'text-amber-300' : 'text-red-300'}`}>
+                  {streamError.previewUrl ? 'Playing Preview' : 'Track Unavailable'}
+                </h4>
+                <p className="text-xs text-neutral-400 mt-1 leading-relaxed">{streamError.message}</p>
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      const q = `${streamError.trackTitle || ''} ${streamError.trackArtist || ''}`.trim();
+                      setSearchQuery(q);
+                      setActiveTab('browse');
+                      setStreamError(null);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:scale-105 active:scale-95 flex items-center gap-1.5 ${
+                      streamError.previewUrl 
+                        ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300' 
+                        : 'bg-red-500/20 hover:bg-red-500/30 text-red-300'
+                    }`}
+                  >
+                    <Search size={12} />
+                    Search on YouTube
+                  </button>
+                  <button
+                    onClick={() => setStreamError(null)}
+                    className="text-neutral-500 hover:text-white text-xs font-medium px-2 py-1"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Silent audio to trigger browser media session */}
-      <audio ref={silentAudioRef} loop muted style={{ display: 'none' }} src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=" />
+      <audio ref={silentAudioRef} loop style={{ display: 'none' }} src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=" />
       
       {/* Dynamic Background Image + Blur (Aura - Mesh Gradient effect) */}
       <div
@@ -1082,6 +1412,7 @@ function App() {
                       title={track.title}
                       artist={track.artist}
                       artworkUrl={track.artwork_url}
+                      source={track.source}
                       onClick={() => handleStreamExternalAudio(track, 'liked')}
                       isPlaying={(playerTrack?.id || currentTrackPath) === track.id && isPlaying}
                     />
@@ -1136,10 +1467,11 @@ function App() {
                             title={track.title}
                             artist={track.artist}
                             artworkUrl={track.artwork_url}
+                            source={track.source}
                             onClick={() => {
                               const url = track.stream_url || (
-                                track.source === 'youtube' ? `https://www.youtube.com/watch?v=${track.id.split('-')[1] || track.id}` :
-                                  track.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${track.id.split('-')[1]}` :
+                                track.source === 'youtube' ? `https://www.youtube.com/watch?v=${track.id.replace('yt-', '')}` :
+                                  track.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${track.id.replace('sc-', '')}` :
                                     track.id
                               );
                               const streamUrl = track.stream_url || url;
@@ -1165,8 +1497,8 @@ function App() {
                         {searchResults.map(track => (
                           <TrackResult key={track.id} track={track} onPlay={(track) => {
                             const url = track.stream_url || (
-                              track.source === 'youtube' ? `https://www.youtube.com/watch?v=${track.id.split('-')[1] || track.id}` :
-                                track.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${track.id.split('-')[1]}` :
+                              track.source === 'youtube' ? `https://www.youtube.com/watch?v=${track.id.replace('yt-', '')}` :
+                                track.source === 'soundcloud' ? `https://api-v2.soundcloud.com/tracks/${track.id.replace('sc-', '')}` :
                                   track.id
                             );
                             const streamUrl = track.stream_url || url;
@@ -1189,6 +1521,25 @@ function App() {
                   ) : (
                     <div className="py-20 text-center text-neutral-500">
                       <p>No results found for "{searchQuery}"</p>
+                    </div>
+                  )}
+                  
+                  {/* Infinite scroll / Load more */}
+                  {searchResults.length > 0 && hasMore && (
+                    <div ref={loadMoreSentinelRef} className="flex items-center justify-center py-8">
+                      {isLoadingMore ? (
+                        <div className="flex items-center gap-3 text-neutral-400">
+                          <div className="w-5 h-5 border-2 border-[var(--color-neon-yellow)] border-t-transparent rounded-full animate-spin" />
+                          <span className="text-sm font-medium">Loading more...</span>
+                        </div>
+                      ) : (
+                        <button 
+                          onClick={loadMore}
+                          className="px-6 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-sm font-medium text-neutral-300 hover:text-white transition-all"
+                        >
+                          Load more results
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1216,7 +1567,7 @@ function App() {
                         const newSources = { ...activeSources, [source]: !isActive };
                         setActiveSources(newSources);
                         // If we disable the currently selected source, switch back to youtube
-                        if (isActive && searchSource === source) setSearchSource('youtube');
+                        if (isActive && searchSource === source) setSearchSource('all');
                       }}
                       className={`flex items-center justify-between p-4 rounded-2xl transition-all border ${isActive
                         ? 'bg-white/10 border-[var(--color-neon-yellow)] shadow-[0_0_15px_-5px_rgba(219,255,0,0.3)]'
@@ -1251,6 +1602,22 @@ function App() {
                     <span className="font-bold text-white">Auto-Loop Liked Songs</span>
                     <div className={`w-12 h-6 rounded-full transition-colors relative ${autoLoopLiked ? 'bg-[var(--color-neon-yellow)]' : 'bg-neutral-800'}`}>
                       <div className={`absolute top-1 w-4 h-4 rounded-full transition-all ${autoLoopLiked ? 'left-7 bg-black' : 'left-1 bg-neutral-400'}`} />
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setVideoMode(!videoMode)}
+                    className={`flex items-center justify-between p-4 rounded-2xl transition-all border ${videoMode
+                      ? 'bg-white/10 border-red-500 shadow-[0_0_15px_-5px_rgba(239,68,68,0.3)]'
+                      : 'bg-black/20 border-white/5 hover:bg-white/5'
+                      }`}
+                  >
+                    <div className="flex flex-col items-start gap-1">
+                      <span className="font-bold text-white">Music Video Mode</span>
+                      <span className="text-xs text-neutral-400">Show YouTube video in player</span>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full transition-colors relative ${videoMode ? 'bg-red-500' : 'bg-neutral-800'}`}>
+                      <div className={`absolute top-1 w-4 h-4 rounded-full transition-all ${videoMode ? 'left-7 bg-white' : 'left-1 bg-neutral-400'}`} />
                     </div>
                   </button>
                 </div>
@@ -1418,7 +1785,6 @@ function App() {
                 style={{ willChange: "transform" }}
                 className="absolute bottom-[-25%] right-[-25%] w-[120%] h-[120%] rounded-full opacity-20 bg-amber-700 blur-[80px]"
               />
-              {/* Replaced heavy backdrop-blur with a lightweight gradient overlay */}
               <div className="absolute inset-0 bg-gradient-to-b from-[#09090b]/40 to-[#09090b]/80 pointer-events-none" />
             </div>
             <div className="absolute top-8 inset-x-8 z-50 flex justify-between items-center pointer-events-none">
@@ -1429,56 +1795,91 @@ function App() {
                 <ChevronDown size={28} />
               </button>
 
-              <button
-                onClick={() => setShowMobileLyrics(!showMobileLyrics)}
-                className={`md:hidden p-3 rounded-full transition-colors pointer-events-auto shadow-lg ${showMobileLyrics ? 'bg-[var(--color-neon-yellow)] text-black shadow-[0_0_15px_rgba(219,255,0,0.4)]' : 'bg-white/10 hover:bg-white/20 text-white'}`}
-              >
-                <ListMusic size={24} />
-              </button>
+              <div className="flex items-center gap-2 pointer-events-auto">
+                {getYouTubeVideoId(playerTrack) && (
+                  <button
+                    onClick={() => setVideoMode(!videoMode)}
+                    className={`p-3 rounded-full transition-colors shadow-lg ${videoMode ? 'bg-red-600 text-white shadow-[0_0_15px_rgba(239,68,68,0.4)]' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                    title={videoMode ? 'Hide video' : 'Show music video'}
+                  >
+                    <MonitorPlay size={24} />
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowMobileLyrics(!showMobileLyrics)}
+                  className={`md:hidden p-3 rounded-full transition-colors shadow-lg ${showMobileLyrics ? 'bg-[var(--color-neon-yellow)] text-black shadow-[0_0_15px_rgba(219,255,0,0.4)]' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                >
+                  <ListMusic size={24} />
+                </button>
+              </div>
             </div>
 
-            <div className="flex flex-col md:flex-row w-full h-full max-w-7xl mx-auto z-10 px-6 md:px-12 pb-32 pt-32 md:pt-24">
+            <div className="flex flex-col md:flex-row w-full h-full max-w-7xl mx-auto z-10 px-6 md:px-12 pb-32 pt-20 md:pt-24">
               {/* Left Side: Art & Controls */}
-              <div className={`w-full md:w-1/2 flex-col items-center justify-center md:pr-12 mt-6 md:mt-0 overflow-y-auto md:overflow-visible no-scrollbar gap-8 md:gap-12 ${showMobileLyrics ? 'hidden md:flex' : 'flex'}`}>
-                <div className="relative flex items-center justify-center w-[220px] md:w-[320px] lg:w-[380px] aspect-square shrink-0 mt-auto md:mt-0 mb-auto md:mb-10 contain-strict" style={{ transform: 'translateZ(0)' }}>
-                  {/* Premium Ambient Aura (The Glow) */}
-                  <div
-                    className="absolute inset-x-4 bottom-[-10%] top-4 opacity-60 blur-[40px] z-0 pointer-events-none"
-                    style={{
-                      willChange: 'transform, opacity',
-                      backgroundImage: `url(${coverArt || ""})`,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                      borderRadius: '2rem'
-                    }}
-                  />
+              <div className={`w-full md:w-1/2 flex-col items-center justify-center md:pr-12 mt-0 md:mt-0 overflow-y-auto md:overflow-visible no-scrollbar gap-2 md:gap-4 ${showMobileLyrics ? 'hidden md:flex' : 'flex'}`}>
+                <div className="relative flex items-center justify-center w-[65vw] max-w-[320px] md:w-[320px] md:max-w-none lg:w-[380px] aspect-square shrink-0 mt-0 md:mt-0 mb-0 md:mb-2 contain-strict" style={{ transform: 'translateZ(0)' }}>
+                  {videoMode && getYouTubeVideoId(playerTrack) ? (
+                    <>
+                      {/* Video Mode: YouTube Embed */}
+                      <div className="relative z-10 w-full h-full rounded-[2.5rem] md:rounded-[3.5rem] shadow-2xl overflow-hidden">
+                        <iframe
+                          ref={(el) => {
+                            if (el) {
+                              (window as any).__nekobeat_yt_iframe = el;
+                            }
+                          }}
+                          key={getYouTubeVideoId(playerTrack)!}
+                          src={`https://www.youtube-nocookie.com/embed/${getYouTubeVideoId(playerTrack)}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&showinfo=0&loop=0&fs=0&disablekb=1&iv_load_policy=3&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                          className="absolute"
+                          style={{ border: 'none', pointerEvents: 'none', top: '-56%', left: '-33%', width: '166%', height: '210%' }}
+                          allow="autoplay; encrypted-media"
+                          allowFullScreen={false}
+                          title="Music Video"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Premium Ambient Aura (The Glow) */}
+                      <div
+                        className="absolute inset-x-4 bottom-[-10%] top-4 opacity-0 blur-[40px] z-0 pointer-events-none"
+                        style={{
+                          willChange: 'transform, opacity',
+                          backgroundImage: `url(${coverArt || ""})`,
+                          backgroundSize: 'cover',
+                          backgroundPosition: 'center',
+                          borderRadius: '2rem'
+                        }}
+                      />
 
-                  {/* The Glowing Squircle Album Art */}
-                  <motion.div
-                    layoutId="album-art"
-                    whileHover={{ scale: 1.02 }}
-                    className={`relative z-10 w-full h-full rounded-[2.5rem] md:rounded-[3.5rem] shadow-2xl overflow-hidden border border-white/10 transition-all duration-700 ${isPlaying ? 'scale-100' : 'scale-95 opacity-90'}`}
-                    style={{ willChange: 'transform' }}
-                    drag="x"
-                    dragConstraints={{ left: 0, right: 0 }}
-                    dragElastic={0.4}
-                    onDragEnd={(_, info) => {
-                      if (info.offset.x > 100) {
-                        handlePrevTrack();
-                      } else if (info.offset.x < -100) {
-                        handleNextTrack();
-                      }
-                    }}
-                  >
-                    <img
-                      src={coverArt || ""}
-                      className="w-full h-full object-cover"
-                      alt="Album Art"
-                    />
-                  </motion.div>
+                      {/* The Glowing Squircle Album Art */}
+                      <motion.div
+                        layoutId="album-art"
+                        whileHover={{ scale: 1.02 }}
+                        className={`relative z-10 w-full h-full rounded-[2.5rem] md:rounded-[3.5rem] overflow-hidden bg-black transition-all duration-700 ${isPlaying ? 'scale-100' : 'scale-95 opacity-100'}`}
+                        style={{ willChange: 'transform' }}
+                        drag="x"
+                        dragConstraints={{ left: 0, right: 0 }}
+                        dragElastic={0.4}
+                        onDragEnd={(_, info) => {
+                          if (info.offset.x > 100) {
+                            handlePrevTrack();
+                          } else if (info.offset.x < -100) {
+                            handleNextTrack();
+                          }
+                        }}
+                      >
+                        <img
+                          src={coverArt || ""}
+                          className="w-full h-full object-cover"
+                          alt="Album Art"
+                        />
+                      </motion.div>
+                    </>
+                  )}
                 </div>
 
-                <div className="w-full max-w-[350px] flex items-center justify-between text-left shrink-0 relative z-20 mt-4 mb-2 md:m-0">
+                <div className="w-full max-w-[350px] flex items-center justify-between text-left shrink-0 relative z-20 mt-1 mb-1 md:m-0">
                   <div className="truncate flex-1 min-w-0 pr-2">
                     <h2 className="text-xl md:text-3xl font-display font-bold text-white mb-2 truncate drop-shadow-md tracking-tight">{stripExtension(playerTrack.title)}</h2>
                     <p className="text-xs md:text-base text-[var(--color-neon-yellow)] font-medium font-sans truncate drop-shadow-sm uppercase tracking-widest opacity-80">{playerTrack.artist}</p>
@@ -1533,7 +1934,7 @@ function App() {
                   hasPlainLyrics={hasPlainLyrics}
                   plainLyricsText={plainLyricsText}
                   lyricsOffsetMs={lyricsOffsetMs}
-                  onOffsetChange={setLyricsOffsetMs}
+                  onOffsetChange={handleLyricsOffsetChange}
                   onUploadLyrics={handleUploadLyrics}
                 />
               </div>
@@ -1558,14 +1959,6 @@ function NavItem({ icon, label, active = false, hideLabelOnMobile = false, onCli
 }
 
 function HeroSearch({ value, onChange, isSearching, source, onSourceChange, activeSources, onFocus, onBlur }: { value: string; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; isSearching: boolean, source: string, onSourceChange: (s: any) => void, activeSources: Record<string, boolean>, onFocus: () => void, onBlur: () => void }) {
-  const getBrandColor = (_s: string) => {
-    return 'bg-white text-black';
-  };
-
-  const getBrandTextColor = (_s: string) => {
-    return 'text-white';
-  };
-
   return (
     <motion.div 
       layout
@@ -1582,23 +1975,34 @@ function HeroSearch({ value, onChange, isSearching, source, onSourceChange, acti
           onChange={onChange}
           onFocus={onFocus}
           onBlur={onBlur}
-          placeholder={`Search on ${source.charAt(0).toUpperCase() + source.slice(1)}...`}
+          placeholder={source === 'all' ? 'Search YouTube & SoundCloud...' : `Search on ${source.charAt(0).toUpperCase() + source.slice(1)}...`}
           className="w-full bg-zinc-900/40 backdrop-blur-xl border border-white/10 shadow-inner shadow-white/5 rounded-2xl py-6 pl-16 pr-6 text-xl md:text-2xl text-white placeholder-white/20 focus:outline-none focus:ring-2 focus:ring-[var(--color-neon-yellow)] focus:border-transparent transition-all duration-300 shadow-2xl"
         />
       </motion.div>
 
       <motion.div layout className="flex flex-wrap items-center justify-center gap-3">
+        <button
+          onClick={() => onSourceChange('all')}
+          className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all border ${source === 'all' 
+            ? 'bg-gradient-to-b from-[var(--color-neon-yellow)] to-[color-mix(in_srgb,var(--color-neon-yellow)_85%,black)] border-[var(--color-neon-yellow)] text-black shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_20px_-5px_rgba(219,255,0,0.4)]' 
+            : 'bg-white/5 text-neutral-400 border-white/5 hover:bg-white/10 hover:text-white'}`}
+        >
+          All
+        </button>
         {Object.entries(activeSources).filter(([_, isActive]) => isActive).map(([s, _]) => {
-          const brandColor = getBrandColor(s);
-          const textColor = getBrandTextColor(s);
           const isSelected = source === s;
 
           return (
             <button
               key={s}
               onClick={() => onSourceChange(s as any)}
-              style={isSelected ? { background: `linear-gradient(180deg, ${brandColor}, color-mix(in srgb, ${brandColor} 85%, black))`, borderColor: brandColor, color: textColor, boxShadow: `inset 0 2px 4px rgba(255,255,255,0.6), 0 10px 20px -5px ${brandColor}60` } : {}}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all border capitalize ${isSelected ? '' : 'bg-white/5 text-neutral-400 border-white/5 hover:bg-white/10 hover:text-white'}`}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all border capitalize ${isSelected 
+                ? s === 'youtube' 
+                  ? 'bg-red-600 border-red-500 text-white shadow-[0_10px_20px_-5px_rgba(239,68,68,0.4)]'
+                  : s === 'soundcloud'
+                    ? 'bg-orange-500 border-orange-400 text-white shadow-[0_10px_20px_-5px_rgba(249,115,22,0.4)]'
+                    : 'bg-white/20 border-white/30 text-white'
+                : 'bg-white/5 text-neutral-400 border-white/5 hover:bg-white/10 hover:text-white'}`}
             >
               {s}
             </button>
@@ -1630,15 +2034,28 @@ function TrackResult({ track, onPlay, currentTrackId, isCurrentlyPlaying }: { tr
     >
       <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 relative bg-zinc-800">
         <img src={track.artwork_url} className="w-full h-full object-cover" alt={track.title} />
-        {track.source === 'youtube' && (
-          <div className="absolute top-1 right-1 bg-red-600 rounded-md p-0.5 shadow-lg">
-            <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-          </div>
-        )}
+        <div className={`absolute bottom-0 left-0 right-0 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-center ${
+          track.source === 'youtube' ? 'bg-red-600/90 text-white' :
+          track.source === 'soundcloud' ? 'bg-orange-500/90 text-white' :
+          track.source === 'spotify' ? 'bg-green-600/90 text-white' :
+          'bg-white/20 text-white/80'
+        }`}>
+          {track.source === 'youtube' ? 'YT' : track.source === 'soundcloud' ? 'SC' : track.source === 'spotify' ? 'SP' : track.source}
+        </div>
       </div>
       <div className="flex-1 truncate">
         <h4 className={`font-black truncate ${isCurrentTrack ? 'text-[var(--color-neon-yellow)]' : 'text-white'}`}>{stripExtension(track.title)}</h4>
-        <p className="text-xs text-white/50 tracking-wide font-medium truncate">{track.artist}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-white/50 tracking-wide font-medium truncate">{track.artist}</p>
+          <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+            track.source === 'youtube' ? 'bg-red-600/20 text-red-400' :
+            track.source === 'soundcloud' ? 'bg-orange-500/20 text-orange-400' :
+            track.source === 'spotify' ? 'bg-green-600/20 text-green-400' :
+            'bg-white/10 text-white/40'
+          }`}>
+            {track.source === 'youtube' ? 'YouTube' : track.source === 'soundcloud' ? 'SoundCloud' : track.source === 'spotify' ? 'Spotify' : track.source}
+          </span>
+        </div>
       </div>
 
       {/* Hover Actions */}
@@ -1669,7 +2086,7 @@ function SkeletonTrack() {
   );
 }
 
-function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl }: { index: number; title: string; artist: string; onClick: () => void; isPlaying: boolean; artworkUrl?: string }) {
+function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, source }: { index: number; title: string; artist: string; onClick: () => void; isPlaying: boolean; artworkUrl?: string; source?: string }) {
   const [imgUrl, setImgUrl] = useState(artworkUrl || `https://picsum.photos/seed/${title}/400`);
 
   useEffect(() => {
@@ -1693,6 +2110,16 @@ function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl }: { i
     >
       <div className={`aspect-square rounded-2xl md:rounded-xl bg-zinc-800/30 overflow-hidden relative border border-white/10 transition-all duration-300 shadow-[0_15px_35px_rgba(0,0,0,0.4)] group-hover:shadow-[0_25px_50px_rgba(0,0,0,0.6)] group-hover:border-white/20`}>
         <img src={imgUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out" />
+        {source && (
+          <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wide shadow-lg ${
+            source === 'youtube' ? 'bg-red-600 text-white' :
+            source === 'soundcloud' ? 'bg-orange-500 text-white' :
+            source === 'spotify' ? 'bg-green-600 text-white' :
+            'bg-white/20 text-white'
+          }`}>
+            {source === 'youtube' ? 'YT' : source === 'soundcloud' ? 'SC' : source === 'spotify' ? 'SP' : source}
+          </div>
+        )}
         <div className={`absolute inset-0 bg-[#09090b]/50 transition-opacity flex items-center justify-center backdrop-blur-[2px] ${isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
           <div className="w-14 h-14 bg-[var(--color-neon-yellow)] shadow-[0_0_20px_rgba(219,255,0,0.5)] rounded-full flex items-center justify-center border border-white/20">
             {isPlaying ? (

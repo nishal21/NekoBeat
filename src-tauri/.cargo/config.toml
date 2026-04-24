@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-msvc]
+# gobject-2.0-0.dll cannot be delay-loaded (data symbol imports), so it must be
+# available at process startup. This runner script ensures gstreamer/bin is on PATH.
+runner = ["cmd", "/C", "set PATH=gstreamer\\bin;%PATH%&&"]

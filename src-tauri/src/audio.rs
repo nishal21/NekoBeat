@@ -37,23 +37,45 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
             .build()
             .expect("Failed to create playbin element");
 
-        // Set a modern User-Agent and Referer for all network requests (SoundCloud/YouTube)
+        // Disable video rendering — we only need audio
+        let fakesink = gstreamer::ElementFactory::make("fakesink").build().ok();
+        if let Some(ref sink) = fakesink {
+            playbin.set_property("video-sink", sink);
+        }
+
+        // Increase connection speed hint for better format selection
+        playbin.set_property("connection-speed", &(10000u64));
+
+        // Set User-Agent and correct Referer/Origin for all network requests
         playbin.connect("source-setup", false, move |args| {
             let source = args[1].get::<gstreamer::Element>().unwrap();
-            let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+            let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
             
             if source.has_property("user-agent", None) {
                 source.set_property("user-agent", &ua);
             }
             
-            // Set Referer via extra-headers structure if supported (souphttpsrc)
+            // Set Referer and Origin via extra-headers (souphttpsrc)
             if source.has_property("extra-headers", None) {
                 let mut structure = gstreamer::Structure::new_empty("headers");
-                structure.set("Referer", &"https://soundcloud.com/");
+                
+                // Detect source by inspecting the URI property
+                let uri: String = if source.has_property("location", None) {
+                    source.property::<String>("location")
+                } else {
+                    String::new()
+                };
+
+                if uri.contains("googlevideo.com") || uri.contains("youtube.com") {
+                    structure.set("Referer", &"https://www.youtube.com/");
+                    structure.set("Origin", &"https://www.youtube.com");
+                } else if uri.contains("soundcloud") || uri.contains("sndcdn.com") {
+                    structure.set("Referer", &"https://soundcloud.com/");
+                    structure.set("Origin", &"https://soundcloud.com");
+                }
+
                 source.set_property("extra-headers", &structure);
-                println!("GStreamer: Custom User-Agent and Referer set for source element");
-            } else {
-                println!("GStreamer: Custom User-Agent set for source element (extra-headers not supported)");
+                println!("GStreamer: Headers configured for source (uri contains: {}...)", &uri[..std::cmp::min(uri.len(), 60)]);
             }
             None
         });
@@ -63,7 +85,17 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
             .expect("Failed to create equalizer element");
 
         playbin.set_property("audio-filter", &equalizer);
+
+        // Configure buffering for network streams
+        // buffer-size: 2MB buffer for smoother network playback
+        playbin.set_property("buffer-size", &(2 * 1024 * 1024i32));
+        // buffer-duration: 5 seconds of audio buffered ahead
+        playbin.set_property("buffer-duration", &(5_000_000_000i64));
         
+        // Track current volume and EQ so we can re-apply after pipeline resets
+        let mut current_volume: f64 = 1.0;
+        let mut current_eq: [f64; 10] = [0.0; 10];
+
         let bus = playbin.bus().expect("Failed to get bus from playbin");
         let app_handle_for_bus = app_handle.clone();
 
@@ -100,6 +132,13 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         };
                         
                         playbin.set_property("uri", &uri);
+                        // Re-apply volume and EQ after pipeline reset
+                        playbin.set_property("volume", &current_volume);
+                        for (i, &g) in current_eq.iter().enumerate() {
+                            if g != 0.0 {
+                                equalizer.set_property(&format!("band{}", i), &g);
+                            }
+                        }
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
                             let _ = app_handle.emit("audio-playing", path);
                         }
@@ -113,10 +152,21 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                             writeln!(f, "GStreamer: Attempting to play URL: {}", url)
                         });
 
+                        let _ = app_handle.emit("audio-buffering", true);
                         set_state_safe(&playbin, gstreamer::State::Null, &app_handle);
                         playbin.set_property("uri", &url);
+                        // Re-apply volume and EQ after pipeline reset
+                        playbin.set_property("volume", &current_volume);
+                        for (i, &g) in current_eq.iter().enumerate() {
+                            if g != 0.0 {
+                                equalizer.set_property(&format!("band{}", i), &g);
+                            }
+                        }
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
                             let _ = app_handle.emit("audio-playing", url);
+                            let _ = app_handle.emit("audio-buffering", false);
+                        } else {
+                            let _ = app_handle.emit("audio-buffering", false);
                         }
                     }
                     AudioCommand::Pause => {
@@ -137,6 +187,7 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                     }
                     AudioCommand::SetVolume(volume) => {
                         println!("GStreamer: Setting volume to {}", volume);
+                        current_volume = volume;
                         playbin.set_property("volume", &volume);
                     }
                     AudioCommand::SetEqBand(band, gain) => {
@@ -144,6 +195,7 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                             eprintln!("GStreamer: Invalid EQ band index: {}", band);
                         } else {
                             let clamped_gain = gain.clamp(-24.0, 12.0);
+                            current_eq[band as usize] = clamped_gain;
                             let prop_name = format!("band{}", band);
                             equalizer.set_property(&prop_name, &clamped_gain);
                         }
@@ -174,8 +226,23 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         let _ = app_handle_for_bus.emit("audio-ended", true);
                     }
                     MessageView::Error(err) => {
-                        eprintln!("GStreamer error: {}", err.error());
-                        let _ = app_handle_for_bus.emit("audio-error", format!("GStreamer error: {}", err.error()));
+                        let err_msg = format!("GStreamer error: {}", err.error());
+                        if let Some(debug) = err.debug() {
+                            eprintln!("{} (debug: {})", err_msg, debug);
+                        } else {
+                            eprintln!("{}", err_msg);
+                        }
+                        // Reset pipeline to prevent stuck state
+                        let _ = playbin.set_state(gstreamer::State::Null);
+                        let _ = app_handle_for_bus.emit("audio-error", err_msg);
+                    }
+                    MessageView::Buffering(buffering) => {
+                        let percent = buffering.percent();
+                        if percent < 100 {
+                            let _ = app_handle_for_bus.emit("audio-buffering", true);
+                        } else {
+                            let _ = app_handle_for_bus.emit("audio-buffering", false);
+                        }
                     }
                     MessageView::StateChanged(state) => {
                         if state.src().map(|s| s == playbin.upcast_ref::<gstreamer::Object>()).unwrap_or(false) {
@@ -199,17 +266,37 @@ pub async fn stream_external_audio(
     source: String
 ) -> Result<String, String> {
     println!("Streaming external audio from {}: {}", source, url);
+    let _ = app.emit("audio-buffering", true);
     match crate::aggregator::resolver::resolve_url(&app, &url).await {
         Ok(resolved_url) => {
-            if resolved_url.starts_with("file://") {
-                let file_path = resolved_url.trim_start_matches("file://").to_string();
-                state.tx.send(AudioCommand::Play(file_path)).map_err(|e| e.to_string())?;
+            let _ = app.emit("audio-buffering", false);
+            
+            // Check if this is a preview URL (SoundCloud restricted tracks)
+            let (actual_url, is_preview) = if let Some(preview_url) = resolved_url.strip_prefix("PREVIEW:") {
+                println!("Audio: Playing preview (30s) for restricted track");
+                let _ = app.emit("audio-preview", "This track is restricted by the distributor. Playing 30-second preview.");
+                (preview_url.to_string(), true)
             } else {
-                state.tx.send(AudioCommand::PlayUrl(resolved_url.clone())).map_err(|e| e.to_string())?;
+                (resolved_url.clone(), false)
+            };
+            
+            if let Some(path) = actual_url.strip_prefix("file:///") {
+                state.tx.send(AudioCommand::Play(path.to_string())).map_err(|e| e.to_string())?;
+            } else if let Some(path) = actual_url.strip_prefix("file://") {
+                state.tx.send(AudioCommand::Play(path.to_string())).map_err(|e| e.to_string())?;
+            } else {
+                state.tx.send(AudioCommand::PlayUrl(actual_url.clone())).map_err(|e| e.to_string())?;
             }
-            Ok(resolved_url)
+            // Return PREVIEW: prefix so frontend knows
+            if is_preview {
+                Ok(format!("PREVIEW:{}", actual_url))
+            } else {
+                Ok(resolved_url)
+            }
         }
         Err(e) => {
+            let _ = app.emit("audio-buffering", false);
+            let _ = app.emit("audio-error", format!("Stream resolution failed: {}", e));
             eprintln!("Failed to resolve stream URL: {}", e);
             Err(e)
         }

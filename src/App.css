@@ -3,6 +3,7 @@
 @theme {
   --font-sans: "Inter", "San Francisco", "Segoe UI Variable", "Roboto", sans-serif;
   --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-lyrics: "Noto Sans", "Noto Sans JP", "Noto Sans KR", "Noto Sans SC", "Noto Sans TC", "Noto Sans Arabic", "Noto Sans Devanagari", "Noto Sans Thai", "Noto Sans Tamil", "Noto Sans Bengali", "Noto Sans Telugu", "Noto Sans Kannada", "Noto Sans Malayalam", "Noto Sans Georgian", "Noto Sans Armenian", "Noto Sans Hebrew", "Inter", sans-serif;
 
   --color-neon-yellow: #dbff00;
   --color-neon-green: #00ff66;
@@ -120,4 +121,4 @@ body {
   appearance: slider-vertical;
   width: 12px;
   height: 100%;
-}
+}
