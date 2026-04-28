@@ -10,8 +10,15 @@
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![React](https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/kKj8dqq6Je)
+[![Website](https://img.shields.io/badge/Website-FF4088?logo=astro&logoColor=white)](https://nishal21.github.io/NekoBeat-Website/)
 
-[Download](https://github.com/nishal21/NekoBeat/releases/latest) | [Report Bug](https://github.com/nishal21/NekoBeat/issues)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/kingtanjiro)
+[![Patreon](https://img.shields.io/badge/Patreon-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://patreon.com/DemonKing08)
+[![Ko-Fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/demon_king)
+[![Github Sponsorship](https://img.shields.io/badge/github-sponsors-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/nishal21)
+
+[Download](https://github.com/nishal21/NekoBeat/releases/latest) | [Report Bug](https://github.com/nishal21/NekoBeat/issues) | [Discord](https://discord.gg/kKj8dqq6Je) | [Website](https://nishal21.github.io/NekoBeat-Website/)
 
 </div>
 
@@ -91,13 +98,25 @@ Full Windows SMTC / macOS Now Playing integration with play, pause, next, previo
 
 ## Installation
 
-### Download
+### Windows (Recommended)
 
-Grab the latest release from the [Releases](https://github.com/nishal21/NekoBeat/releases/latest) page.
+Install with **winget** for automatic updates:
 
-- **Windows**: `NekoBeat_x64-setup.exe` (recommended) or `.msi`
+```powershell
+winget install NekoBeat
+```
+
+Or download manually from the [Releases](https://github.com/nishal21/NekoBeat/releases/latest) page:
+- `NekoBeat_x64-setup.exe` (portable installer)
+- `NekoBeat_x64.msi` (system-wide)
 
 > The Windows installer bundles all dependencies including GStreamer — no manual setup required.
+
+### Other Platforms
+
+- **macOS**: Coming soon
+- **Linux**: Coming soon
+- **Android**: Coming soon
 
 ### Build from Source
 
@@ -157,6 +176,24 @@ NekoBeat was built with inspiration and reference from these amazing open-source
 - **[MusicXMatch API](https://github.com/Fabrice-Music/musicxmatch-api)** — TypeScript wrapper for Musixmatch with automatic signature generation. Referenced for lyrics fetching.
 
 Thank you to all the developers and contributors behind these projects.
+
+## Community & Support
+
+- **Discord**: [Join our server](https://discord.gg/kKj8dqq6Je) for discussions, support, and feature requests
+- **GitHub Discussions**: [Start a conversation](https://github.com/nishal21/NekoBeat/discussions) — I read every single one!
+- **Website**: [NekoBeat](https://nishal21.github.io/NekoBeat-Website/)
+
+## Star History
+
+<a href="https://star-history.com/#nishal21/NekoBeat&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date" />
+  </picture>
+</a>
+
+> ⭐ **Every star fuels my motivation!** If NekoBeat makes your day a bit brighter, hit that star button — it means the world to me.
 
 ## License
 
