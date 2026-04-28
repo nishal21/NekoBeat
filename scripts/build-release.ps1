@@ -16,7 +16,7 @@ if (-not (Test-Path $keyPath)) {
     exit 1
 }
 $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content $keyPath -Raw
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "Nishal@2008"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "" # Add ur Password in it if it has
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  NekoBeat Release Build" -ForegroundColor Cyan
