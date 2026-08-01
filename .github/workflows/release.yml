@@ -104,26 +104,27 @@ jobs:
           fi
           KEY_FILE="${RUNNER_TEMP}/tauri_updater.key"
           export KEY_FILE
-          # Strip mid-key newlines (GitHub paste → "Invalid symbol 10"), keep comment lines.
+          # Local key is a single base64 line (len 348). A trailing \n becomes
+          # "Invalid symbol 10, offset 348" — do NOT append a newline.
           python3 - <<'PY'
-          import os
+          import os, re
           from pathlib import Path
-          raw = os.environ["KEY"].replace("\r\n", "\n").replace("\r", "\n").strip()
-          comments, body = [], []
-          for line in raw.split("\n"):
-              if line.startswith("untrusted comment:"):
-                  comments.append(line)
-              else:
-                  body.append(line)
-          payload = "".join(body).replace(" ", "").replace("\t", "")
+          raw = os.environ["KEY"].replace("\r\n", "\n").replace("\r", "\n")
+          body = "\n".join(
+              line for line in raw.split("\n")
+              if line and not line.startswith("untrusted comment:")
+          )
+          # Keep only base64 alphabet (drops paste newlines/spaces)
+          payload = re.sub(rb"[^A-Za-z0-9+/=]", b"", body.encode("utf-8"))
           if not payload:
               raise SystemExit("private key base64 body is empty after sanitize")
-          out = "\n".join(comments + [payload]) + "\n"
-          Path(os.environ["KEY_FILE"]).write_text(out, encoding="utf-8")
-          print(f"updater key file ready: comments={len(comments)} base64_len={len(payload)}")
+          if b"\n" in payload or 10 in payload:
+              raise SystemExit("sanitize failed: newline still in payload")
+          # Write EXACT bytes — no trailing newline (offset 348 == former bug)
+          Path(os.environ["KEY_FILE"]).write_bytes(payload)
+          print(f"updater key file ready: base64_len={len(payload)} trailing_nl=False")
           PY
-          # tauri build only reads TAURI_SIGNING_PRIVATE_KEY (path OR contents).
-          # PATH-only env is ignored by `tauri build` → "public key found, but no private key".
+          # tauri build reads TAURI_SIGNING_PRIVATE_KEY as path or contents
           echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
 
