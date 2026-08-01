@@ -95,7 +95,9 @@ fn init_windows() {
 ))]
 fn init_unix() {
     use std::env;
-    let common: Vec<&str> = vec![
+    // mut needed on macOS (extend homebrew paths); unused_mut on Linux is fine
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut common: Vec<&str> = vec![
         "/usr/lib/gstreamer-1.0",
         "/usr/lib64/gstreamer-1.0",
         "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
