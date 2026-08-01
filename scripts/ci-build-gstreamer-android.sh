@@ -17,8 +17,9 @@ if [[ -z "$NDK" || ! -x "$NDK/ndk-build" ]]; then
   exit 1
 fi
 
-# Ensure Cerbero branch of Android.mk is used (no prebuilt yet)
-rm -rf "$GST_DIR/libs/arm64-v8a/libgstreamer_android.so"
+# Wipe Windows/CI leftovers — .d files with D:/ paths break Linux make
+# ("target pattern contains no '%'").
+rm -rf "$GST_DIR/obj" "$GST_DIR/libs" "$JNI_DIR/gst-android-build"
 mkdir -p "$GST_DIR/libs/arm64-v8a"
 
 echo "Building GStreamer Android umbrella (arm64-v8a)..."
