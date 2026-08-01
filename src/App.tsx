@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { createPortal } from "react-dom";
 import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, EQ_PRESETS, useAudioClock, getAudioClock, seedAudioClockDuration, isResumeGuarded, isRealArtworkUrl, toDisplayArtUrl, usePlayQueue, QueueTrack } from "./hooks";
@@ -316,11 +317,49 @@ const ExpandedProgressBar = memo(({ durationMs, onSeek }: { durationMs: number |
   );
 });
 
-/** Volume: horizontal slider on touch/expanded; hover flyout still works on desktop chrome. */
+/** Volume: vertical flyout (portaled — not clipped by player overflow) or inline for expanded view. */
 const VolumeControl = memo(({ volume, onChange, alwaysShow = false }: { volume: number, onChange: (v: number) => void, alwaysShow?: boolean }) => {
   const [open, setOpen] = useState(false);
-  const showSlider = alwaysShow || open;
+  const [flyoutPos, setFlyoutPos] = useState<{ left: number; bottom: number } | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const volSpring = { type: "spring" as const, stiffness: 420, damping: 32, mass: 0.6 };
+
+  const clearClose = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  const scheduleClose = () => {
+    clearClose();
+    closeTimer.current = setTimeout(() => setOpen(false), 160);
+  };
+
+  const updateFlyoutPos = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setFlyoutPos({
+      left: r.left + r.width / 2,
+      bottom: window.innerHeight - r.top + 8,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open || alwaysShow) return;
+    updateFlyoutPos();
+    const onMove = () => updateFlyoutPos();
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, alwaysShow, updateFlyoutPos]);
+
+  useEffect(() => () => clearClose(), []);
 
   const VolumeIcon = (
     <AnimatePresence mode="wait" initial={false}>
@@ -345,7 +384,7 @@ const VolumeControl = memo(({ volume, onChange, alwaysShow = false }: { volume: 
           whileTap={{ scale: 0.88 }}
           className="text-neutral-300 hover:text-white transition-colors p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-white/5 shrink-0"
           onClick={() => onChange(volume === 0 ? 0.7 : 0)}
-          aria-label={volume === 0 ? 'Unmute' : 'Mute'}
+          aria-label={volume === 0 ? "Unmute" : "Mute"}
         >
           {VolumeIcon}
         </motion.button>
@@ -373,60 +412,76 @@ const VolumeControl = memo(({ volume, onChange, alwaysShow = false }: { volume: 
     );
   }
 
-  return (
-    <div
-      className="relative flex items-center justify-center"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      <AnimatePresence>
-        {showSlider && (
-          <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.92 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.95 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 flex flex-col items-center justify-center w-14 h-44 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl z-[80] py-3 pointer-events-auto"
-            // Invisible bridge so moving from icon → slider doesn't close
-            style={{ paddingBottom: 0 }}
-          >
-            {/* hit-area bridge into the button */}
-            <div className="absolute -bottom-3 left-0 right-0 h-3" aria-hidden />
-            <div className="relative w-10 h-36 flex items-center justify-center">
-              <div className="relative w-1.5 h-full bg-white/10 rounded-full overflow-hidden pointer-events-none">
-                <motion.div
-                  className="absolute bottom-0 w-full bg-[var(--color-neon-yellow)] rounded-full shadow-[0_0_10px_rgba(219,255,0,0.5)]"
-                  animate={{ height: `${Math.max(0, Math.min(1, volume)) * 100}%` }}
-                  transition={volSpring}
-                />
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={volume}
-                onChange={(e) => onChange(parseFloat(e.target.value))}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer orientation-vertical z-10 touch-manipulation"
-                style={{ appearance: 'slider-vertical' } as any}
-                aria-label="Volume"
+  const flyout = createPortal(
+    <AnimatePresence>
+      {open && flyoutPos && (
+        <motion.div
+          key="vol-flyout"
+          initial={{ opacity: 0, y: 10, scale: 0.92, x: "-50%" }}
+          animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
+          exit={{ opacity: 0, y: 8, scale: 0.95, x: "-50%" }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          className="fixed z-[200] flex flex-col items-center justify-center w-14 h-44 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl py-3 pointer-events-auto"
+          style={{
+            left: flyoutPos.left,
+            bottom: flyoutPos.bottom,
+          }}
+          onMouseEnter={() => {
+            clearClose();
+            setOpen(true);
+          }}
+          onMouseLeave={scheduleClose}
+        >
+          <div className="relative w-10 h-36 flex items-center justify-center">
+            <div className="relative w-1.5 h-full bg-white/10 rounded-full overflow-hidden pointer-events-none">
+              <motion.div
+                className="absolute bottom-0 w-full bg-[var(--color-neon-yellow)] rounded-full shadow-[0_0_10px_rgba(219,255,0,0.5)]"
+                animate={{ height: `${Math.max(0, Math.min(1, volume)) * 100}%` }}
+                transition={volSpring}
               />
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) => onChange(parseFloat(e.target.value))}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer orientation-vertical z-10 touch-manipulation"
+              style={{ appearance: "slider-vertical" } as React.CSSProperties}
+              aria-label="Volume"
+            />
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body
+  );
 
+  return (
+    <div
+      ref={wrapRef}
+      className="relative flex items-center justify-center"
+      onMouseEnter={() => {
+        clearClose();
+        updateFlyoutPos();
+        setOpen(true);
+      }}
+      onMouseLeave={scheduleClose}
+    >
+      {flyout}
       <motion.button
         type="button"
         whileTap={{ scale: 0.88 }}
         className="text-neutral-400 hover:text-white transition-colors p-2 min-w-[44px] min-h-[44px] flex items-center justify-center hover:bg-white/5 rounded-full"
         onClick={() => {
-          // Touch / click: toggle popover; second tap on icon mutes when already open
           if (open) onChange(volume === 0 ? 0.7 : 0);
-          else setOpen(true);
+          else {
+            updateFlyoutPos();
+            setOpen(true);
+          }
         }}
-        onBlur={() => setTimeout(() => setOpen(false), 200)}
-        aria-label={volume === 0 ? 'Unmute' : 'Volume'}
+        aria-label={volume === 0 ? "Unmute" : "Volume"}
         aria-expanded={open}
       >
         {VolumeIcon}
@@ -2431,7 +2486,7 @@ function App() {
         className="glass-panel fixed z-[60] flex items-center gap-1.5 sm:gap-3
                    md:inset-x-0 md:bottom-0 md:h-[88px] md:px-6 lg:px-8 md:rounded-none md:border-t md:border-white/10 md:bg-[var(--color-surface-glass-heavy)]
                    rounded-2xl shadow-[0_12px_32px_rgba(0,0,0,0.45)] bg-black/55 backdrop-blur-[40px] border border-white/10
-                   mobile-mini-player md:!bottom-0 md:!left-0 md:!right-0 md:!h-[88px] md:!px-6 overflow-hidden"
+                   mobile-mini-player md:!bottom-0 md:!left-0 md:!right-0 md:!h-[88px] md:!px-6 overflow-x-clip overflow-y-visible"
       >
         {/* Mobile progress hint along the top edge */}
         <div className="md:hidden absolute top-0 inset-x-0 z-20 rounded-t-2xl overflow-hidden">
