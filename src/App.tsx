@@ -148,7 +148,12 @@ const ProgressBar = memo(({ durationMs, onSeek, compact = false }: { durationMs:
           setDragPct(null);
           try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
         }}
-        onPointerCancel={() => { dragging.current = false; setDragPct(null); }}
+        onPointerCancel={(e) => {
+          dragging.current = false;
+          setDragPct(null);
+          try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        }}
+        onLostPointerCapture={() => { dragging.current = false; setDragPct(null); }}
         role="slider"
         tabIndex={0}
         aria-label="Seek track"
@@ -615,6 +620,69 @@ interface NewsTrack {
   artwork_url: string;
   url: string;
   release_date: string;
+  source?: string;
+  country?: string;
+}
+
+const NEWS_COUNTRY_OPTIONS: { code: string; label: string }[] = [
+  { code: "auto", label: "Auto (system locale)" },
+  { code: "in", label: "India (JioSaavn + local charts)" },
+  { code: "us", label: "United States" },
+  { code: "gb", label: "United Kingdom" },
+  { code: "jp", label: "Japan" },
+  { code: "kr", label: "South Korea" },
+  { code: "de", label: "Germany" },
+  { code: "fr", label: "France" },
+  { code: "br", label: "Brazil" },
+  { code: "ca", label: "Canada" },
+  { code: "au", label: "Australia" },
+  { code: "mx", label: "Mexico" },
+  { code: "es", label: "Spain" },
+  { code: "it", label: "Italy" },
+  { code: "id", label: "Indonesia" },
+  { code: "ph", label: "Philippines" },
+];
+
+function localeNewsCountry(): string {
+  try {
+    // Timezone is more reliable than Windows UI language (often en-US in India)
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    if (/Kolkat|Calcutta|Asia\/Kolkata/i.test(tz)) return "in";
+    if (tz === "Asia/Tokyo") return "jp";
+    if (tz === "Asia/Seoul") return "kr";
+    if (tz === "America/Sao_Paulo") return "br";
+    if (tz === "Europe/London") return "gb";
+    if (tz.startsWith("America/") && /New_York|Chicago|Denver|Los_Angeles|Phoenix/.test(tz)) return "us";
+
+    const loc =
+      Intl.DateTimeFormat().resolvedOptions().locale ||
+      (typeof navigator !== "undefined" ? navigator.language : "") ||
+      "en-US";
+    const parts = loc.replace(/_/g, "-").split("-");
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      if (p.length === 2 && /^[A-Za-z]{2}$/.test(p)) return p.toLowerCase();
+    }
+  } catch {
+    /* ignore */
+  }
+  return "us";
+}
+
+/** Settings override → system locale/timezone → us */
+function resolveNewsCountry(): string {
+  const saved = localStorage.getItem("nekobeat_news_country");
+  if (saved && saved !== "auto" && /^[a-z]{2}$/.test(saved)) return saved;
+  return localeNewsCountry();
+}
+
+function newsSourceBadge(track: NewsTrack): string {
+  if (track.source === "jiosaavn") return "IN";
+  if (track.source === "apple") {
+    return (track.country || "??").toUpperCase();
+  }
+  if (track.source === "lastfm") return "LFM";
+  return "";
 }
 
 const Equalizer = memo(() => {
@@ -773,6 +841,27 @@ function App() {
     }
   };
 
+  // Recover if a previous session left the window borderless / tiny
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        await appWindow.setDecorations(true);
+        await appWindow.setAlwaysOnTop(false);
+        const size = await appWindow.outerSize();
+        const factor = await appWindow.scaleFactor();
+        const logical = size.toLogical(factor);
+        // Stuck miniplayer size from a crashed session
+        if (logical.height < 220 || logical.width < 480) {
+          await appWindow.setSize(new LogicalSize(1200, 800));
+        }
+        if (!cancelled) setIsMiniplayerMode(false);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // References for global media keys
   const onTogglePlayRef = useRef<any>(null);
   const onNextRef = useRef<any>(null);
@@ -917,18 +1006,42 @@ function App() {
     return () => { unlisten?.(); };
   }, []);
 
-  // Single music news fetch (Listen home + Browse idle strip)
+  // Single music news fetch (Listen home + Browse idle strip) — regional Apple + global Last.fm
   const [browseNewsLoading, setBrowseNewsLoading] = useState(true);
+  const [newsCountryPref, setNewsCountryPref] = useState(
+    () => localStorage.getItem("nekobeat_news_country") || "auto"
+  );
+  const [newsCountry, setNewsCountry] = useState(() => resolveNewsCountry());
+
+  const applyNewsCountryPref = useCallback((pref: string) => {
+    if (pref === "auto") {
+      localStorage.removeItem("nekobeat_news_country");
+      setNewsCountryPref("auto");
+      setNewsCountry(localeNewsCountry());
+    } else {
+      localStorage.setItem("nekobeat_news_country", pref);
+      setNewsCountryPref(pref);
+      setNewsCountry(pref);
+    }
+  }, []);
+
   useEffect(() => {
-    invoke<NewsTrack[]>('get_music_news')
+    let cancelled = false;
+    setBrowseNewsLoading(true);
+    invoke<NewsTrack[]>("get_music_news", { country: newsCountry })
       .then((data) => {
-        setBrowseNews(data);
-        setBrowseNewsLoading(false);
+        if (!cancelled) {
+          setBrowseNews(data);
+          setBrowseNewsLoading(false);
+        }
       })
       .catch(() => {
-        setBrowseNewsLoading(false);
+        if (!cancelled) setBrowseNewsLoading(false);
       });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [newsCountry]);
 
   // Extract YouTube video ID from the current track (if applicable)
   const getYouTubeVideoId = (track: any): string | null => {
@@ -1791,81 +1904,105 @@ function App() {
   const hasPlainLyrics = !!lyricsData?.plainLyrics || (!!playerTrack?.local_lyrics && !isLocalSynced);
   const plainLyricsText = (playerTrack?.local_lyrics && !isLocalSynced) ? playerTrack.local_lyrics : lyricsData?.plainLyrics;
 
+  // Escape exits miniplayer / expanded player / queue
+  useEffect(() => {
+    if (!isMiniplayerMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        void toggleMiniplayerMode();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isMiniplayerMode]);
+
   if (isMiniplayerMode) {
     return (
-      <div 
-        onMouseDown={(e) => {
-          if (e.button === 0) { // Left click
-            getCurrentWindow().startDragging();
-          }
-        }}
-        className="w-full h-screen bg-[#09090b]/90 backdrop-blur-3xl flex items-center p-4 gap-4 border border-white/10 rounded-2xl overflow-hidden shadow-2xl cursor-default select-none group/pip"
-        style={{
-          backgroundImage: `url('${playerTrack?.artwork_url || coverArt || ""}')`,
-          backgroundSize: "cover",
-          backgroundPosition: "center"
-        }}
-      >
-        <div data-tauri-drag-region className="absolute inset-0 bg-black/70 backdrop-blur-[80px]" />
-        
-        <div data-tauri-drag-region className="relative w-24 h-24 rounded-2xl overflow-hidden shrink-0 shadow-2xl border border-white/10">
+      <div className="w-full h-screen bg-[#09090b] flex items-center p-3 gap-3 border border-white/10 rounded-2xl overflow-hidden shadow-2xl select-none relative">
+        {/* Drag only this strip — never full-window (that ate clicks / froze cursor) */}
+        <div
+          data-tauri-drag-region
+          className="absolute top-0 inset-x-0 h-7 z-20 cursor-grab active:cursor-grabbing"
+          title="Drag window"
+        />
+
+        <div className="absolute inset-0 bg-black/80 backdrop-blur-[60px] pointer-events-none z-0" />
+        {(playerTrack?.artwork_url || coverArt) && (
+          <div
+            className="absolute inset-0 opacity-40 pointer-events-none z-0"
+            style={{
+              backgroundImage: `url('${playerTrack?.artwork_url || coverArt || ""}')`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              filter: "blur(40px)",
+            }}
+          />
+        )}
+
+        <div className="relative z-10 w-20 h-20 rounded-xl overflow-hidden shrink-0 shadow-2xl border border-white/10">
           {(playerTrack?.artwork_url || coverArt) ? (
-            <img data-tauri-drag-region src={playerTrack?.artwork_url || coverArt || ""} className="w-full h-full object-cover" alt="Cover" />
+            <img src={playerTrack?.artwork_url || coverArt || ""} className="w-full h-full object-cover" alt="Cover" draggable={false} />
           ) : (
-            <div data-tauri-drag-region className="w-full h-full bg-neutral-800 flex items-center justify-center">
+            <div className="w-full h-full bg-neutral-800 flex items-center justify-center">
               <ListMusic size={28} className="text-neutral-500" />
             </div>
           )}
         </div>
-        
-        <div data-tauri-drag-region className="relative flex flex-col flex-1 min-w-0 justify-center h-full">
-          <div data-tauri-drag-region className="mb-2">
-            <p data-tauri-drag-region className="text-white font-black text-base truncate w-full pr-8 drop-shadow-md">{playerTrack ? stripExtension(playerTrack.title) : "No track playing"}</p>
-            <p data-tauri-drag-region className="text-[var(--color-neon-yellow)] text-xs font-bold uppercase tracking-widest truncate w-full opacity-80">{playerTrack?.artist || "Nekobeat"}</p>
+
+        <div className="relative z-10 flex flex-col flex-1 min-w-0 justify-center h-full pt-4">
+          <div className="mb-2 min-w-0">
+            <p className="text-white font-black text-sm truncate w-full drop-shadow-md">
+              {playerTrack ? stripExtension(playerTrack.title) : "No track playing"}
+            </p>
+            <p className="text-[var(--color-neon-yellow)] text-[11px] font-bold uppercase tracking-widest truncate w-full opacity-80">
+              {playerTrack?.artist || "Nekobeat"}
+            </p>
           </div>
-          
-          <div className="flex items-center gap-4">
-            <button 
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={handlePrevTrack} 
-              disabled={!currentTrackPath} 
-              className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-all active:scale-90"
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handlePrevTrack}
+              disabled={!currentTrackPath}
+              className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-all active:scale-90 disabled:opacity-40"
+              aria-label="Previous"
             >
               <SkipBack size={18} fill="currentColor" />
             </button>
             <button
-              onMouseDown={(e) => e.stopPropagation()}
+              type="button"
               onClick={togglePause}
               disabled={!currentTrackPath}
-              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${isBuffering ? 'bg-[var(--color-neon-yellow)]/30 animate-pulse' : 'bg-[var(--color-neon-yellow)] text-black shadow-lg hover:scale-110 active:scale-95'}`}
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-40 ${isBuffering ? "bg-[var(--color-neon-yellow)]/30 animate-pulse" : "bg-[var(--color-neon-yellow)] text-black shadow-lg hover:scale-110 active:scale-95"}`}
+              aria-label={isPlaying ? "Pause" : "Play"}
             >
               {isBuffering ? (
-                 <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
               ) : isPlaying ? (
                 <Pause size={18} fill="currentColor" />
               ) : (
                 <Play size={18} fill="currentColor" className="ml-1" />
               )}
             </button>
-            <button 
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={handleNextTrack} 
-              disabled={!currentTrackPath} 
-              className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-all active:scale-90"
+            <button
+              type="button"
+              onClick={handleNextTrack}
+              disabled={!currentTrackPath}
+              className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-all active:scale-90 disabled:opacity-40"
+              aria-label="Next"
             >
               <SkipForward size={18} fill="currentColor" />
             </button>
           </div>
         </div>
-        
-        <button 
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleMiniplayerMode();
-          }} 
-          className="absolute top-3 right-3 text-white/40 hover:text-white p-2 rounded-xl hover:bg-white/10 transition-all z-[100] backdrop-blur-md"
-          title="Expand"
+
+        <button
+          type="button"
+          onClick={() => { void toggleMiniplayerMode(); }}
+          className="absolute top-2 right-2 z-30 text-white hover:text-black p-2.5 min-w-[40px] min-h-[40px] rounded-xl bg-white/15 hover:bg-[var(--color-neon-yellow)] transition-all backdrop-blur-md border border-white/20"
+          title="Restore window (Esc)"
+          aria-label="Restore window"
         >
           <Maximize2 size={16} />
         </button>
@@ -2331,6 +2468,30 @@ function App() {
 
               <section className="settings-card space-y-4">
                 <div>
+                  <h3 className="text-base sm:text-lg font-display font-bold text-white">New releases region</h3>
+                  <p className="text-sm text-[var(--color-ink-muted)] mt-1">
+                    Apple charts for your country + global Last.fm. JioSaavn (Bollywood / Indian new releases) is only loaded when region is India — other regions never get it unless you switch to India.
+                    {newsCountryPref === "auto" ? ` Auto → ${newsCountry.toUpperCase()}.` : ""}
+                  </p>
+                </div>
+                <label className="block space-y-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[var(--color-ink-faint)]">Country</span>
+                  <select
+                    value={newsCountryPref}
+                    onChange={(e) => applyNewsCountryPref(e.target.value)}
+                    className="w-full min-h-[48px] rounded-2xl bg-black/40 border border-white/10 text-white px-4 py-3 font-medium focus:outline-none focus:border-[var(--color-neon-yellow)]/60"
+                  >
+                    {NEWS_COUNTRY_OPTIONS.map((opt) => (
+                      <option key={opt.code} value={opt.code} className="bg-zinc-900 text-white">
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </section>
+
+              <section className="settings-card space-y-4">
+                <div>
                   <h3 className="text-base sm:text-lg font-display font-bold text-white">Search sources</h3>
                   <p className="text-sm text-[var(--color-ink-muted)] mt-1">
                     Platforms included when you search. Restart after enabling a new backend if results look stale.
@@ -2445,6 +2606,7 @@ function App() {
             <MusicNews
               news={browseNews}
               loading={browseNewsLoading}
+              newsCountry={newsCountry}
               viewMode={viewMode}
               setViewMode={setViewMode}
               recentPlays={recentPlays}
@@ -2599,8 +2761,8 @@ function App() {
             type="button"
             onClick={toggleMiniplayerMode}
             className="transition-colors w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 text-neutral-400 hover:text-white"
-            title="Miniplayer"
-            aria-label="Miniplayer"
+            title="Compact miniplayer window"
+            aria-label="Compact miniplayer window"
           >
             <Minimize2 size={18} />
           </button>
@@ -3383,6 +3545,7 @@ function MusicNews({
   onQuickNav,
   news = [],
   loading = false,
+  newsCountry = "us",
 }: {
   onSelect: (track: NewsTrack) => void;
   viewMode: 'grid' | 'list';
@@ -3392,6 +3555,7 @@ function MusicNews({
   onQuickNav?: (tab: 'browse' | 'library' | 'liked') => void;
   news?: NewsTrack[];
   loading?: boolean;
+  newsCountry?: string;
 }) {
   if (loading) {
     return (
@@ -3462,7 +3626,10 @@ function MusicNews({
         <div>
           <p className="section-kicker mb-2">Fresh</p>
           <h2 className="text-2xl md:text-4xl font-display font-black text-white tracking-tighter leading-none">New releases</h2>
-          <p className="text-[var(--color-ink-muted)] mt-2 font-medium text-sm max-w-md">Tap a cover — we’ll jump to Browse and start the match.</p>
+          <p className="text-[var(--color-ink-muted)] mt-2 font-medium text-sm max-w-md">
+            {newsCountry.toUpperCase()} charts + global Last.fm
+            {newsCountry === "in" ? " (incl. JioSaavn)" : ""} — tap a cover to match in Browse.
+          </p>
         </div>
         <ViewToggle viewMode={viewMode} onChange={setViewMode} />
       </div>
@@ -3475,9 +3642,11 @@ function MusicNews({
         </div>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 md:gap-6">
-          {news.map((track, i) => (
+          {news.map((track, i) => {
+            const badge = newsSourceBadge(track);
+            return (
             <motion.div
-              key={`${track.title}-${track.artist}-${track.release_date}-${i}`}
+              key={`${track.source}-${track.title}-${track.artist}-${track.release_date}-${i}`}
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: Math.min(i * 0.02, 0.4), type: "spring", stiffness: 300, damping: 25 }}
@@ -3487,6 +3656,11 @@ function MusicNews({
             >
               <div className="aspect-square rounded-xl md:rounded-[2rem] bg-zinc-800/30 overflow-hidden relative border border-white/10 transition-all duration-300 shadow-xl group-hover:shadow-2xl group-hover:border-white/20">
                 <img src={track.artwork_url || logoImg} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt={track.title} />
+                {badge && (
+                  <span className="absolute top-2 left-2 z-10 text-[9px] font-black uppercase tracking-wider text-black bg-[var(--color-neon-yellow)] px-1.5 py-0.5 rounded-md shadow-md">
+                    {badge}
+                  </span>
+                )}
                 <div className="absolute inset-0 bg-black/25 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <div className="bg-[var(--color-neon-yellow)] text-black rounded-full p-3 md:hidden shadow-[0_0_18px_rgba(219,255,0,0.4)]">
                     <Play size={16} fill="currentColor" className="ml-0.5" />
@@ -3502,13 +3676,16 @@ function MusicNews({
                 <p className="text-[10px] text-[var(--color-neon-yellow)] font-black uppercase tracking-widest opacity-90 mt-0.5 truncate">{track.release_date}</p>
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="flex flex-col gap-2 md:gap-3">
-          {news.map((track, i) => (
+          {news.map((track, i) => {
+            const badge = newsSourceBadge(track);
+            return (
             <motion.div
-              key={`${track.title}-${track.artist}-${track.release_date}-${i}`}
+              key={`${track.source}-${track.title}-${track.artist}-${track.release_date}-${i}`}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: Math.min(i * 0.01, 0.3) }}
@@ -3517,6 +3694,11 @@ function MusicNews({
             >
               <div className="w-14 h-14 md:w-16 md:h-16 rounded-xl md:rounded-2xl overflow-hidden shrink-0 relative bg-zinc-800">
                 <img src={track.artwork_url || logoImg} className="w-full h-full object-cover" alt={track.title} />
+                {badge && (
+                  <span className="absolute bottom-1 left-1 text-[8px] font-black uppercase tracking-wider text-black bg-[var(--color-neon-yellow)] px-1 py-0.5 rounded">
+                    {badge}
+                  </span>
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <h4 className="font-black text-white truncate text-sm md:text-base group-hover:text-[var(--color-neon-yellow)] transition-colors">{track.title}</h4>
@@ -3531,7 +3713,8 @@ function MusicNews({
                 <span className="hidden md:inline">Play</span>
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </div>
       )}
     </motion.div>
