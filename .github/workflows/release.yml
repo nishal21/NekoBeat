@@ -100,15 +100,30 @@ jobs:
           fi
           if [ -z "$PW" ]; then
             echo "::error::Missing secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD."
-            echo "CI requires a passworded key. See .tauri/PUT_THESE_IN_GITHUB_SECRETS.txt on your machine."
             exit 1
           fi
           KEY_FILE="${RUNNER_TEMP}/tauri_updater.key"
-          # Preserve exact key bytes; avoid extra trailing issues
-          printf '%s' "$KEY" > "$KEY_FILE"
-          # Ensure file ends with a newline (minisign-friendly)
-          echo >> "$KEY_FILE"
-          echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
+          # Secrets ARE loaded — failure "Invalid symbol 10" means a newline (\n) is inside the
+          # base64 body (common when pasting long keys into GitHub). Strip those; keep comment lines.
+          export KEY_FILE
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          raw = os.environ["KEY"].replace("\r\n", "\n").replace("\r", "\n").strip()
+          comments, body = [], []
+          for line in raw.split("\n"):
+              if line.startswith("untrusted comment:"):
+                  comments.append(line)
+              else:
+                  body.append(line)
+          # Remove whitespace/newlines from base64 payload only
+          payload = "".join(body).replace(" ", "").replace("\t", "")
+          out = "\n".join(comments + [payload]) + "\n"
+          Path(os.environ["KEY_FILE"]).write_text(out, encoding="utf-8")
+          print(f"updater key: {len(comments)} comment line(s), base64 len={len(payload)}")
+          PY
+          # Use PATH var so Tauri does not treat a filesystem path as key text
+          echo "TAURI_SIGNING_PRIVATE_KEY_PATH=${KEY_FILE}" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
 
       - name: Linux system deps (WebKit + GStreamer)
