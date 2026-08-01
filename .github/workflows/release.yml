@@ -3,12 +3,13 @@
 #
 # Triggers: tag v* or Actions → Release → Run workflow
 #
-# Desktop: Windows (.msi/.exe), Linux (.deb/.AppImage), macOS (.dmg) arm64 + x86_64
+# Desktop: Windows (.msi/.exe), Linux (.deb/.AppImage), macOS arm64 + Intel
 # Android: aarch64 APK (GStreamer Android SDK + existing gen/android)
 #
 # Required for updater signatures (createUpdaterArtifacts: true):
-#   TAURI_SIGNING_PRIVATE_KEY
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (empty string ok if key has no password)
+#   TAURI_SIGNING_PRIVATE_KEY = full private key text (same as .tauri/nekobeat.key)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD = only if the key was generated WITH a password.
+#     Do NOT create this secret for unencrypted keys (empty secret → "failed to fill whole buffer").
 #
 # Optional Android signing (otherwise debug/unsigned release APK):
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
@@ -43,13 +44,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon (native on macos-latest)
           - platform: macos-latest
             args: >-
               --config src-tauri/tauri.desktop.conf.json
               --config src-tauri/tauri.macos.conf.json
               --target aarch64-apple-darwin
             rust_targets: aarch64-apple-darwin
-          - platform: macos-latest
+          # Intel Mac: native on macos-13 — do NOT cross from arm (glib-sys/pkg-config breaks)
+          - platform: macos-13
             args: >-
               --config src-tauri/tauri.desktop.conf.json
               --config src-tauri/tauri.macos.conf.json
@@ -86,16 +89,27 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Require updater signing secret
+      - name: Prepare updater signing env
+        shell: bash
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PW: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::Set repo secret TAURI_SIGNING_PRIVATE_KEY (and optional TAURI_SIGNING_PRIVATE_KEY_PASSWORD)."
-            echo "Private key must match the pubkey in src-tauri/tauri.conf.json (createUpdaterArtifacts is enabled)."
+            echo "::error::Set repo secret TAURI_SIGNING_PRIVATE_KEY to the contents of .tauri/nekobeat.key"
+            echo "It must match pubkey in src-tauri/tauri.conf.json (createUpdaterArtifacts is enabled)."
             exit 1
           fi
-        shell: bash
+          # Path form avoids multiline/newline corruption in some runners
+          KEY_FILE="${RUNNER_TEMP}/tauri_updater.key"
+          printf '%s\n' "$KEY" > "$KEY_FILE"
+          echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
+          # Only export password when non-empty. Empty/wrong PW → "failed to fill whole buffer"
+          if [ -n "${PW}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
+          else
+            echo "No TAURI_SIGNING_PRIVATE_KEY_PASSWORD set (OK for unencrypted keys)."
+          fi
 
       - name: Linux system deps (WebKit + GStreamer)
         if: matrix.platform == 'ubuntu-22.04'
@@ -123,7 +137,7 @@ jobs:
             gstreamer1.0-tools
 
       - name: macOS GStreamer
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         run: |
           brew update
           brew install gstreamer pkg-config
@@ -198,8 +212,7 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # TAURI_SIGNING_* already injected via GITHUB_ENV (password omitted when unset)
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
           releaseName: "NekoBeat ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}"
