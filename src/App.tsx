@@ -453,7 +453,6 @@ const VolumeControl = memo(({ volume, onChange, alwaysShow = false }: { volume: 
               value={volume}
               onChange={(e) => onChange(parseFloat(e.target.value))}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer orientation-vertical z-10 touch-manipulation"
-              style={{ appearance: "slider-vertical" } as React.CSSProperties}
               aria-label="Volume"
             />
           </div>
