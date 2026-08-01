@@ -50,8 +50,9 @@ jobs:
               --config src-tauri/tauri.macos.conf.json
               --target aarch64-apple-darwin
             rust_targets: aarch64-apple-darwin
-          # Intel Mac: native on macos-13 — do NOT cross from arm (glib-sys/pkg-config breaks)
-          - platform: macos-13
+          # Intel Mac: native x86_64 on macos-15-intel (macos-13 retired Dec 2025)
+          # Do NOT cross-compile from arm — glib-sys/pkg-config breaks
+          - platform: macos-15-intel
             args: >-
               --config src-tauri/tauri.desktop.conf.json
               --config src-tauri/tauri.macos.conf.json
