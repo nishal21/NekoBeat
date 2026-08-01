@@ -1,271 +1,221 @@
-use rusty_ytdl::{Video, VideoOptions, VideoQuality, VideoSearchOptions, RequestOptions};
-use futures::FutureExt;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use tauri::{AppHandle, Manager};
+use tokio::sync::Mutex as AsyncMutex;
 
-pub async fn resolve_url(app: &tauri::AppHandle, url: &str) -> Result<String, String> {
+/// Serialize yt-dlp so play + prefetch don't thrash the same binary/network.
+fn yt_dlp_lock() -> &'static AsyncMutex<()> {
+    static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| AsyncMutex::new(()))
+}
+
+pub async fn resolve_url(
+    app: &tauri::AppHandle,
+    url: &str,
+    hint_title: Option<&str>,
+    hint_artist: Option<&str>,
+) -> Result<String, String> {
     println!("Resolver: Resolving URL: {}", url);
     let result = if url.contains("youtube.com") || url.contains("youtu.be") {
-        resolve_youtube(url).await
+        // souphttpsrc cannot fetch googlevideo CDN on this setup (error -5).
+        // Download with yt-dlp (correct UA/signing) then play a local file.
+        resolve_youtube_download(app, url).await
     } else if url.contains("soundcloud.com") || url.contains("api-v2.soundcloud.com") {
-        resolve_soundcloud(url).await
+        // souphttpsrc also fails on sndcdn CDN (error -5) — download then file:// play.
+        resolve_soundcloud_download(app, url).await
     } else if url.contains("spotify.com") {
-        crate::aggregator::spotify::resolve_spotify_url(app, url).await
+        crate::aggregator::spotify::resolve_spotify_url(app, url, hint_title, hint_artist).await
     } else {
         Err(format!("Unsupported external source URL: {}", url))
     };
     match &result {
-        Ok(resolved) => println!("Resolver: Successfully resolved to: {}...", &resolved[..std::cmp::min(resolved.len(), 120)]),
+        Ok(resolved) => println!(
+            "Resolver: Successfully resolved to: {}...",
+            &resolved[..std::cmp::min(resolved.len(), 120)]
+        ),
         Err(e) => eprintln!("Resolver: Failed: {}", e),
     }
     result
 }
 
-/// Resolve a YouTube URL to a direct audio stream URL using rusty_ytdl.
-/// No external binaries needed — works on any machine, instant playback.
-async fn resolve_youtube(url: &str) -> Result<String, String> {
-    println!("YouTube: Resolving direct stream URL for: {}", url);
-
-    // Build a browser-like reqwest client to avoid bot detection
-    let custom_client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .build()
-        .ok();
-
-    // CONSENT cookie bypasses YouTube's consent wall
-    let cookies_str = "CONSENT=YES+cb.20210328-17-p0.en+FX+634".to_string();
-
-    // Only request Audio-only formats — VideoAudio (itag 18/22) gets 403'd by YouTube CDN
-    let strategies: Vec<(VideoSearchOptions, &str)> = vec![
-        (VideoSearchOptions::Audio, "Audio-only"),
-    ];
-
-    let mut last_err = String::from("No strategies attempted");
-
-    for (filter, label) in &strategies {
-        // Retry each strategy up to 2 times (rusty_ytdl can be flaky)
-        for attempt in 1..=2 {
-            let video_options = VideoOptions {
-                quality: VideoQuality::HighestAudio,
-                filter: filter.clone(),
-                request_options: RequestOptions {
-                    client: custom_client.clone(),
-                    cookies: Some(cookies_str.clone()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-
-            let video = match Video::new_with_options(url, video_options.clone()) {
-                Ok(v) => v,
-                Err(e) => {
-                    last_err = format!("YouTube: Failed to create video object: {}", e);
-                    continue;
-                }
-            };
-
-            let video_info = match std::panic::AssertUnwindSafe(video.get_info())
-                .catch_unwind()
-                .await
-            {
-                Ok(Ok(info)) => info,
-                Ok(Err(e)) => {
-                    last_err = format!("YouTube: Failed to get video info (attempt {}): {}", attempt, e);
-                    println!("{}", last_err);
-                    if attempt < 2 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                    continue;
-                }
-                Err(_) => {
-                    last_err = format!("YouTube: get_info panicked (attempt {})", attempt);
-                    println!("{}", last_err);
-                    if attempt < 2 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                    continue;
-                }
-            };
-
-            println!("YouTube: [{}] Got info for '{}', {} formats available (attempt {})",
-                label,
-                video_info.video_details.title,
-                video_info.formats.len(),
-                attempt
+/// Warm disk cache for a track without playing (next-up / skip latency).
+pub async fn prefetch_url(
+    app: &tauri::AppHandle,
+    url: &str,
+    hint_title: Option<&str>,
+    hint_artist: Option<&str>,
+) -> Result<(), String> {
+    println!("Prefetch: warming cache for {}", url);
+    let result = if url.contains("spotify.com") {
+        crate::aggregator::spotify::prefetch_spotify_youtube(app, url, hint_title, hint_artist).await
+    } else {
+        resolve_url(app, url, hint_title, hint_artist).await
+    };
+    match result {
+        Ok(uri) => {
+            println!(
+                "Prefetch: ready {}",
+                &uri[..std::cmp::min(uri.len(), 100)]
             );
-
-            if video_info.formats.is_empty() {
-                last_err = format!("YouTube: [{}] 0 formats on attempt {}", label, attempt);
-                if attempt < 2 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                }
-                continue;
-            }
-
-            // Manual format selection: pick best audio-only format with a non-empty URL
-            // choose_format() often fails because many formats have empty URLs
-            // that need n-parameter deciphering which rusty_ytdl can't always do
-            // IMPORTANT: Only audio/* mimes — video/mp4 (itag 18/22) get 403'd by YouTube CDN
-            let mut candidates: Vec<_> = video_info.formats.iter()
-                .filter(|f| !f.url.is_empty())
-                .filter(|f| f.mime_type.mime.to_string().starts_with("audio/"))
-                .collect();
-
-            // Sort by bitrate descending (highest quality first)
-            candidates.sort_by(|a, b| b.bitrate.cmp(&a.bitrate));
-
-            println!("YouTube: [{}] {} audio formats with non-empty URL out of {} total (attempt {})",
-                label, candidates.len(), video_info.formats.len(), attempt);
-
-            if let Some(best) = candidates.first() {
-                let stream_url = best.url.clone();
-                println!("YouTube: Resolved via [{}] (mime: {}, bitrate: {:?}, length: {:?})",
-                    label,
-                    best.mime_type.mime.to_string(),
-                    best.bitrate,
-                    best.content_length,
-                );
-                return Ok(stream_url);
-            }
-
-            last_err = format!("YouTube: [{}] no audio formats with URL (attempt {})", label, attempt);
-            if attempt < 2 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
+            Ok(())
         }
-    }
-
-    // All rusty_ytdl strategies failed — try yt-dlp as final fallback
-    println!("YouTube: rusty_ytdl failed, trying yt-dlp fallback...");
-    match resolve_youtube_ytdlp(url).await {
-        Ok(resolved) => return Ok(resolved),
         Err(e) => {
-            eprintln!("YouTube: yt-dlp fallback also failed: {}", e);
-            return Err(format!("{} | yt-dlp fallback: {}", last_err, e));
+            eprintln!("Prefetch: failed: {}", e);
+            Err(e)
         }
     }
 }
 
-/// Fallback: use bundled yt-dlp.exe to get a direct audio stream URL
-async fn resolve_youtube_ytdlp(url: &str) -> Result<String, String> {
-    // Find yt-dlp binary: check bundled locations
-    let exe = std::env::current_exe().unwrap_or_default();
-    let exe_dir = exe.parent().unwrap_or_else(|| std::path::Path::new("."));
-    
-    let candidates = vec![
-        exe_dir.join("yt-dlp.exe"),
-        exe_dir.join("bin").join("yt-dlp.exe"),
-        // Bundled as resource: ends up in <install_dir>/bin/yt-dlp.exe
-        exe_dir.join("resources").join("bin").join("yt-dlp.exe"),
-        // Dev mode: relative to src-tauri
-        std::path::PathBuf::from("bin/yt-dlp.exe"),
-        std::path::PathBuf::from("src-tauri/bin/yt-dlp.exe"),
-    ];
-
-    let ytdlp_path = candidates.iter().find(|p| p.exists())
-        .ok_or_else(|| "yt-dlp binary not found".to_string())?;
-
-    println!("YouTube: Using yt-dlp at: {:?}", ytdlp_path);
-
-    // Build strategies: tv_embedded first (most reliable), cookies as fallback
-    let mut strategies: Vec<Vec<String>> = Vec::new();
-
-    // Strategy 1: tv_embedded without cookies — usually works
-    strategies.push(vec![
-        "-f".into(), "bestaudio".into(), "--get-url".into(), "--no-warnings".into(),
-        "--extractor-args".into(), "youtube:player_client=tv_embedded".into(),
-        url.into()
-    ]);
-
-    // Strategy 2: Default without cookies
-    strategies.push(vec![
-        "-f".into(), "bestaudio".into(), "--get-url".into(), "--no-warnings".into(),
-        url.into()
-    ]);
-
-    // Strategy 3+: cookies.txt fallback (if tv_embedded gets blocked)
-    // NOTE: Do NOT put cookies.txt inside src-tauri/ — it triggers Tauri hot-reload
-    let candidates_cookies = vec![
-        exe_dir.join("cookies.txt"),
-        std::path::PathBuf::from("../cookies.txt"),
-        std::path::PathBuf::from("cookies.txt"),
-    ];
-    if let Some(cp) = candidates_cookies.iter().find(|p| p.exists()).map(|p| p.to_string_lossy().to_string()) {
-        println!("YouTube: Found cookies.txt at: {}", cp);
-        strategies.push(vec![
-            "-f".into(), "bestaudio".into(), "--get-url".into(), "--no-warnings".into(),
-            "--cookies".into(), cp,
-            url.into()
-        ]);
-    }
-
-    // Strategy 4+: Browser cookies as last resort
-    for browser in &["edge", "chrome"] {
-        strategies.push(vec![
-            "-f".into(), "bestaudio".into(), "--get-url".into(), "--no-warnings".into(),
-            "--cookies-from-browser".into(), (*browser).to_string(),
-            url.into()
-        ]);
-    }
-
-    let mut last_stderr = String::new();
-    for args in &strategies {
-        let label = &args[..std::cmp::min(args.len(), 6)];
-        println!("YouTube: yt-dlp trying: {:?}", label);
-        
-        // Use timeout to avoid hanging on browser cookie extraction
-        let child = tokio::process::Command::new(ytdlp_path)
-            .args(args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
-        
-        let output = match child {
-            Ok(c) => {
-                match tokio::time::timeout(std::time::Duration::from_secs(30), c.wait_with_output()).await {
-                    Ok(Ok(o)) => o,
-                    Ok(Err(e)) => {
-                        println!("YouTube: yt-dlp process error: {}", e);
-                        continue;
-                    }
-                    Err(_) => {
-                        println!("YouTube: yt-dlp timed out (30s), trying next strategy...");
-                        continue;
-                    }
-                }
-            }
-            Err(e) => {
-                println!("YouTube: yt-dlp spawn failed: {}", e);
-                continue;
-            }
-        };
-
-        if output.status.success() {
-            let stream_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let first_url = stream_url.lines().next().unwrap_or("").to_string();
-            if !first_url.is_empty() {
-                println!("YouTube: yt-dlp resolved to: {}...", &first_url[..std::cmp::min(first_url.len(), 100)]);
-                return Ok(first_url);
-            }
+fn youtube_video_id(url: &str) -> Option<String> {
+    if let Some(v) = url.split("v=").nth(1) {
+        let id = v.split('&').next()?.trim();
+        if id.len() >= 8 {
+            return Some(id.to_string());
         }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        // If it's a cookie extraction error, skip silently and try next browser
-        if stderr.contains("could not find") || stderr.contains("not available") || stderr.contains("Profile") {
-            println!("YouTube: Browser cookie extraction failed, trying next...");
+    }
+    if let Some(rest) = url.split("youtu.be/").nth(1) {
+        let id = rest.split('?').next()?.trim();
+        if id.len() >= 8 {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+fn yt_cache_dir(app: &AppHandle) -> PathBuf {
+    let app_dir = app
+        .path()
+        .app_cache_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let dir = app_dir.join("yt_audio");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn find_cached_yt_file(dir: &Path, video_id: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
             continue;
         }
-        last_stderr = stderr;
-        println!("YouTube: yt-dlp strategy failed: {}", &last_stderr[..std::cmp::min(last_stderr.len(), 200)]);
+        let name = path.file_name()?.to_string_lossy();
+        if name.starts_with(video_id)
+            && !name.ends_with(".part")
+            && !name.ends_with(".ytdl")
+        {
+            if let Ok(meta) = entry.metadata() {
+                if meta.len() > 50_000 {
+                    return Some(path);
+                }
+            }
+        }
     }
-
-    Err(format!("yt-dlp error: {}", last_stderr))
+    None
 }
 
-/// Resolve a YouTube search query to a direct audio stream URL.
-/// Used as Spotify fallback — searches YouTube and returns a streamable URL.
-/// Scrapes YouTube HTML for video ID, then resolves stream via rusty_ytdl.
-pub async fn resolve_youtube_search(query: &str) -> Result<String, String> {
+/// Download YouTube audio via yt-dlp to disk, return file:// URI for GStreamer.
+/// yt-dlp talks to googlevideo itself — avoids broken souphttpsrc CDN streaming.
+async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, String> {
+    let video_id = youtube_video_id(url)
+        .ok_or_else(|| format!("YouTube: could not parse video id from {}", url))?;
+    let cache_dir = yt_cache_dir(app);
+
+    if let Some(existing) = find_cached_yt_file(&cache_dir, &video_id) {
+        println!("YouTube: disk cache hit — instant play ({:?})", existing);
+        return Ok(crate::path_util::path_to_file_uri(&existing));
+    }
+
+    // One yt-dlp at a time — play wins the lock first; prefetch waits then hits cache.
+    let _guard = yt_dlp_lock().lock().await;
+
+    // Re-check after waiting (another task may have finished the download).
+    if let Some(existing) = find_cached_yt_file(&cache_dir, &video_id) {
+        println!("YouTube: disk cache hit after wait — {:?}", existing);
+        return Ok(crate::path_util::path_to_file_uri(&existing));
+    }
+
+    let ytdlp_path = crate::process_util::find_ytdlp()?;
+    let out_tmpl = cache_dir
+        .join(format!("{}.%(ext)s", video_id))
+        .to_string_lossy()
+        .to_string();
+
+    println!(
+        "YouTube: Downloading via yt-dlp to cache (id={}) — soup CDN stream broken on this build",
+        video_id
+    );
+
+    // tv_embedded often yields smaller audio-only; android as fallback (progressive mp4).
+    let mut last_err = String::new();
+    for client in ["tv_embedded", "android"] {
+        // Clean partials from a previous failed attempt
+        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&video_id)
+                    && (name.ends_with(".part") || name.ends_with(".ytdl"))
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+
+        let args = vec![
+            "-f".into(),
+            "ba/bestaudio/best".into(),
+            "--no-warnings".into(),
+            "--no-playlist".into(),
+            "--extractor-args".into(),
+            format!("youtube:player_client={}", client),
+            "-o".into(),
+            out_tmpl.clone(),
+            "--".into(),
+            url.to_string(),
+        ];
+
+        let mut cmd = tokio::process::Command::new(&ytdlp_path);
+        cmd.args(&args);
+        match crate::process_util::run_silent_timeout(cmd, std::time::Duration::from_secs(180))
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                if let Some(path) = find_cached_yt_file(&cache_dir, &video_id) {
+                    println!(
+                        "YouTube: Downloaded via {} → {:?} ({} bytes)",
+                        client,
+                        path,
+                        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                    );
+                    return Ok(crate::path_util::path_to_file_uri(&path));
+                }
+                last_err = format!("yt-dlp {} succeeded but cache file missing", client);
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                last_err = format!("{} | {}", stderr, stdout);
+                println!(
+                    "YouTube: yt-dlp {} download failed: {}",
+                    client,
+                    &last_err[..std::cmp::min(last_err.len(), 200)]
+                );
+            }
+            Err(e) => {
+                last_err = e;
+                println!("YouTube: yt-dlp {} error: {}", client, last_err);
+            }
+        }
+    }
+
+    Err(format!("YouTube download failed: {}", last_err))
+}
+
+/// Resolve a YouTube search query → download top hit → local file URI.
+pub async fn resolve_youtube_search(app: &AppHandle, query: &str) -> Result<String, String> {
     println!("YouTube Search: Resolving stream for query: '{}'", query);
 
-    // Step 1: Find video ID by scraping YouTube search results HTML
     let scrape_result = async {
         let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -277,19 +227,27 @@ pub async fn resolve_youtube_search(query: &str) -> Result<String, String> {
             urlencoding::encode(query)
         );
 
-        let html = client.get(&url)
+        let html = client
+            .get(&url)
             .header("Accept-Language", "en-US,en;q=0.9")
             .header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+634")
-            .send().await.map_err(|e| format!("YouTube search request failed: {}", e))?
-            .text().await.map_err(|e| e.to_string())?;
+            .send()
+            .await
+            .map_err(|e| format!("YouTube search request failed: {}", e))?
+            .text()
+            .await
+            .map_err(|e| e.to_string())?;
 
         let marker = "var ytInitialData = ";
         let start = html.find(marker).ok_or("Could not find ytInitialData")?;
         let json_start = start + marker.len();
-        let json_end = html[json_start..].find(";</script>").ok_or("Could not find end of ytInitialData")?;
+        let json_end = html[json_start..]
+            .find(";</script>")
+            .ok_or("Could not find end of ytInitialData")?;
         let json_str = &html[json_start..json_start + json_end];
 
-        let data: serde_json::Value = serde_json::from_str(json_str).map_err(|e| e.to_string())?;
+        let data: serde_json::Value =
+            serde_json::from_str(json_str).map_err(|e| e.to_string())?;
 
         let contents = data
             .pointer("/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents")
@@ -302,7 +260,23 @@ pub async fn resolve_youtube_search(query: &str) -> Result<String, String> {
                         .and_then(|c| c.as_array())
                         .and_then(|items| {
                             items.iter().find_map(|item| {
-                                item.pointer("/videoRenderer/videoId").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                let id = item
+                                    .pointer("/videoRenderer/videoId")
+                                    .and_then(|v| v.as_str())?;
+                                // Skip YouTube Shorts / teasers (< 90s) — they make the bar race on a "preview"
+                                let length = item
+                                    .pointer("/videoRenderer/lengthText/simpleText")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let secs = parse_yt_length_secs(length);
+                                if secs > 0 && secs < 90 {
+                                    println!(
+                                        "YouTube Search: skipping short result {} ({}s)",
+                                        id, secs
+                                    );
+                                    return None;
+                                }
+                                Some(id.to_string())
                             })
                         })
                 })
@@ -310,27 +284,233 @@ pub async fn resolve_youtube_search(query: &str) -> Result<String, String> {
             .ok_or_else(|| format!("YouTube Search: No video results for '{}'", query))?;
 
         Ok::<String, String>(video_id)
-    }.await;
+    }
+    .await;
 
-    // Step 2: Resolve stream URL from video ID
     if let Ok(video_id) = scrape_result {
         let video_url = format!("https://www.youtube.com/watch?v={}", video_id);
-        println!("YouTube Search: Found video '{}', resolving stream...", video_id);
-        match resolve_youtube(&video_url).await {
-            Ok(url) => return Ok(url),
-            Err(e) => println!("YouTube Search: resolve_youtube failed for '{}': {}", video_id, e),
+        println!(
+            "YouTube Search: Found video '{}', downloading...",
+            video_id
+        );
+        match resolve_youtube_download(app, &video_url).await {
+            Ok(uri) => return Ok(uri),
+            Err(e) => println!("YouTube Search: download failed for '{}': {}", video_id, e),
         }
     } else {
-        println!("YouTube Search: Scrape failed: {}", scrape_result.unwrap_err());
+        println!(
+            "YouTube Search: Scrape failed: {}",
+            scrape_result.unwrap_err()
+        );
     }
 
-    // Final fallback: yt-dlp with ytsearch:
-    println!("YouTube Search: Trying yt-dlp fallback...");
+    // Last resort: yt-dlp search + download
+    println!("YouTube Search: yt-dlp ytsearch1 download fallback...");
     let search_url = format!("ytsearch1:{}", query);
-    resolve_youtube_ytdlp(&search_url).await
-        .map_err(|e| format!("YouTube Search: all methods failed | yt-dlp: {}", e))
+    resolve_youtube_download(app, &search_url).await
 }
 
-async fn resolve_soundcloud(url: &str) -> Result<String, String> {
-    crate::aggregator::soundcloud::resolve(url).await
+fn sc_track_id(url: &str) -> String {
+    if let Some(rest) = url.split("/tracks/").nth(1) {
+        let id = rest
+            .split(['?', '&', '/'])
+            .next()
+            .unwrap_or("unknown")
+            .trim();
+        if !id.is_empty() {
+            return id.to_string();
+        }
+    }
+    format!("{:x}", md5_like(url))
+}
+
+/// Parse YouTube lengthText like "4:05" or "1:02:03" → seconds (0 if unknown).
+fn parse_yt_length_secs(s: &str) -> u64 {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    match parts.len() {
+        2 => {
+            let m: u64 = parts[0].parse().unwrap_or(0);
+            let sec: u64 = parts[1].parse().unwrap_or(0);
+            m * 60 + sec
+        }
+        3 => {
+            let h: u64 = parts[0].parse().unwrap_or(0);
+            let m: u64 = parts[1].parse().unwrap_or(0);
+            let sec: u64 = parts[2].parse().unwrap_or(0);
+            h * 3600 + m * 60 + sec
+        }
+        _ => 0,
+    }
+}
+
+fn md5_like(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn sc_cache_dir(app: &AppHandle) -> PathBuf {
+    let app_dir = app
+        .path()
+        .app_cache_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let dir = app_dir.join("sc_audio");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn find_cached_sc_file(dir: &Path, track_id: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path.file_name()?.to_string_lossy();
+        if (name == format!("{}.mp3", track_id) || name.starts_with(&format!("{}_", track_id)))
+            && !name.ends_with(".part")
+        {
+            if let Ok(meta) = entry.metadata() {
+                if meta.len() > 8_000 {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn download_http_audio(url: &str, dest: &Path) -> Result<(), String> {
+    if url.contains(".m3u8") || url.contains("/playlist/") {
+        return Err("HLS playlist cannot be downloaded as a single file".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get(url)
+        .header("Referer", "https://soundcloud.com/")
+        .header("Origin", "https://soundcloud.com")
+        .send()
+        .await
+        .map_err(|e| format!("SoundCloud download request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("SoundCloud download HTTP {}", resp.status()));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("SoundCloud download body failed: {}", e))?;
+    if bytes.len() < 8_000 {
+        return Err(format!(
+            "SoundCloud download too small ({} bytes)",
+            bytes.len()
+        ));
+    }
+
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = dest.with_extension("part");
+    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Resolve SoundCloud → download progressive/preview MP3 → local file:// URI.
+async fn resolve_soundcloud_download(app: &AppHandle, url: &str) -> Result<String, String> {
+    let track_id = sc_track_id(url);
+    let cache_dir = sc_cache_dir(app);
+
+    if let Some(existing) = find_cached_sc_file(&cache_dir, &track_id) {
+        let is_preview_cache = existing
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.contains("_preview"))
+            .unwrap_or(false);
+        if !is_preview_cache {
+            println!("SoundCloud: disk cache hit — {:?}", existing);
+            return Ok(crate::path_util::path_to_file_uri(&existing));
+        }
+        println!("SoundCloud: preview cache only — will prefer YouTube full match");
+    }
+
+    let resolved = crate::aggregator::soundcloud::resolve(url).await?;
+    let (stream_url, is_preview) = if let Some(preview) = resolved.strip_prefix("PREVIEW:") {
+        (preview.to_string(), true)
+    } else {
+        (resolved, false)
+    };
+
+    // Geo-blocked / SNIP: prefer a full YouTube match over a silent 30s preview CDN URL.
+    if is_preview {
+        if let Ok((title, artist)) = crate::aggregator::soundcloud::fetch_title_artist(url).await {
+            let query = format!("{} {}", artist, title).trim().to_string();
+            println!(
+                "SoundCloud: SNIP/preview — trying YouTube full match for '{}'",
+                query
+            );
+            match resolve_youtube_search(app, &query).await {
+                Ok(yt) => {
+                    println!("SoundCloud: YouTube fallback OK");
+                    return Ok(yt);
+                }
+                Err(e) => println!("SoundCloud: YouTube fallback failed: {}", e),
+            }
+        }
+    }
+
+    // Prefer progressive HTTP audio. If we only got HLS, fall back to YouTube by failing up.
+    if stream_url.contains(".m3u8") || stream_url.contains("/playlist/") {
+        if let Ok((title, artist)) = crate::aggregator::soundcloud::fetch_title_artist(url).await {
+            let query = format!("{} {}", artist, title).trim().to_string();
+            return resolve_youtube_search(app, &query).await;
+        }
+        return Err(
+            "SoundCloud: only HLS available and CDN streaming is broken on this build — try another track"
+                .into(),
+        );
+    }
+
+    let dest = cache_dir.join(format!(
+        "{}{}.mp3",
+        track_id,
+        if is_preview { "_preview" } else { "" }
+    ));
+    println!(
+        "SoundCloud: Downloading {} stream to {:?}",
+        if is_preview { "preview" } else { "full" },
+        dest
+    );
+
+    match download_http_audio(&stream_url, &dest).await {
+        Ok(()) => {
+            let file_uri = crate::path_util::path_to_file_uri(&dest);
+            if is_preview {
+                Ok(format!("PREVIEW:{}", file_uri))
+            } else {
+                Ok(file_uri)
+            }
+        }
+        Err(e) => {
+            eprintln!("SoundCloud: download failed: {}", e);
+            if let Ok((title, artist)) = crate::aggregator::soundcloud::fetch_title_artist(url).await
+            {
+                let query = format!("{} {}", artist, title).trim().to_string();
+                resolve_youtube_search(app, &query).await
+            } else {
+                Err(e)
+            }
+        }
+    }
 }

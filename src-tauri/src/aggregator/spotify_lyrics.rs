@@ -5,7 +5,6 @@ use sha1::Sha1;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Mutex;
 use lazy_static::lazy_static;
-use urlencoding::encode as url_encode;
 use crate::aggregator::musixmatch::MusixmatchResponse;
 
 lazy_static! {
@@ -13,8 +12,16 @@ lazy_static! {
 }
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const SP_DC: &str = "AQBdJvCjiKQAHusS1xKNSm-6isYhIPCLgf2VO1oX_Q_EtI7KxSlshVcE22sswXTDr3F4zLN6o0PPxR-iGPj1DXoPoXpupESUeq_eYBlsSu_rYEXCJRSvT96az_vrWduEmd6Gz9zV9HjVZjMrVYa6oNxZmtd18NOyW5JuXrdIBMSuAE73tow8HrM2sEfajJZDC2Dw2Jv83Wap1_0WDYBYU-p47Y3lmj8S8yNlX28FCrWSrrX_aMe8VYtFsm3gpo0H0kMRNChgNDYZgcA";
 const SECRET_URL: &str = "https://github.com/xyloflake/spot-secrets-go/blob/main/secrets/secretDict.json?raw=true";
+
+fn spotify_cookie() -> Result<String, String> {
+    if let Ok(cookie) = std::env::var("NEKOBEAT_SPOTIFY_COOKIE") {
+        if !cookie.trim().is_empty() {
+            return Ok(cookie.trim().to_string());
+        }
+    }
+    Err("Set NEKOBEAT_SPOTIFY_COOKIE env var with your sp_dc cookie for Spotify synced lyrics".into())
+}
 
 type HmacSha1 = Hmac<Sha1>;
 
@@ -93,7 +100,7 @@ async fn get_token(client: &Client) -> Result<String, String> {
     println!("Fetching token with URL: {}", url);
     let res = client.get(&url)
         .header("User-Agent", USER_AGENT)
-        .header("Cookie", format!("sp_dc={}", SP_DC))
+        .header("Cookie", format!("sp_dc={}", spotify_cookie()?))
         .send().await.map_err(|e| {
             println!("Get Token HTTP Error: {}", e);
             e.to_string()
@@ -210,7 +217,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires NEKOBEAT_SPOTIFY_COOKIE env var"]
     async fn test_get_spotify_lyrics() {
+        if std::env::var("NEKOBEAT_SPOTIFY_COOKIE").is_err() {
+            return;
+        }
         let result = get_spotify_lyrics_impl("6WfVu4OjY9zES8pecNrcVR").await;
         match result {
             Ok(r) => println!("Success! Lyrics length: {}", r.synced_lyrics.unwrap_or_default().len()),

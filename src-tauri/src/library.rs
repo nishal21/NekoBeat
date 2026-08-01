@@ -3,7 +3,9 @@ use lofty::tag::Accessor;
 use lofty::probe::Probe;
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tauri::Manager;
 use walkdir::WalkDir;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -17,8 +19,43 @@ pub struct TrackData {
     pub local_lyrics: Option<String>,
 }
 
-pub fn init_db() -> SqlResult<Connection> {
-    let conn = Connection::open("nekobeat.db")?;
+/// Library DB lives in app data — NEVER under src-tauri/, or tauri:dev rebuilds
+/// (and "closes" the app) whenever tracks are scanned/cleared.
+pub fn library_db_path(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let _ = fs::create_dir_all(&dir);
+    dir.join("nekobeat_library.db")
+}
+
+fn migrate_legacy_cwd_db(dest: &Path) {
+    if dest.exists() {
+        return;
+    }
+    // Old builds wrote nekobeat.db into the process cwd (often src-tauri during dev)
+    for candidate in [
+        PathBuf::from("nekobeat.db"),
+        PathBuf::from("src-tauri/nekobeat.db"),
+    ] {
+        if candidate.is_file() {
+            if fs::copy(&candidate, dest).is_ok() {
+                println!(
+                    "Library: migrated {:?} -> {:?}",
+                    candidate, dest
+                );
+                let _ = fs::remove_file(&candidate);
+            }
+            break;
+        }
+    }
+}
+
+pub fn init_db(app: &tauri::AppHandle) -> SqlResult<Connection> {
+    let path = library_db_path(app);
+    migrate_legacy_cwd_db(&path);
+    let conn = Connection::open(&path)?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tracks (
             id INTEGER PRIMARY KEY,
@@ -39,9 +76,9 @@ pub fn init_db() -> SqlResult<Connection> {
 }
 
 #[tauri::command]
-pub async fn scan_directory(path: String) -> Result<Vec<TrackData>, String> {
+pub async fn scan_directory(app: tauri::AppHandle, path: String) -> Result<Vec<TrackData>, String> {
     let mut tracks = Vec::new();
-    let conn = init_db().map_err(|e| e.to_string())?;
+    let conn = init_db(&app).map_err(|e| e.to_string())?;
 
     for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
@@ -49,10 +86,13 @@ pub async fn scan_directory(path: String) -> Result<Vec<TrackData>, String> {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str == "mp3" || ext_str == "flac" || ext_str == "m4a" || ext_str == "wav" {
                 if let Ok(mut track) = extract_metadata(path) {
-                    
                     // Check if we already have this track and its lyrics
-                    let mut stmt = conn.prepare("SELECT local_lyrics FROM tracks WHERE filepath = ?1").map_err(|e| e.to_string())?;
-                    let existing_lyrics: Option<String> = stmt.query_row(params![track.filepath], |row| row.get(0)).ok();
+                    let mut stmt = conn
+                        .prepare("SELECT local_lyrics FROM tracks WHERE filepath = ?1")
+                        .map_err(|e| e.to_string())?;
+                    let existing_lyrics: Option<String> = stmt
+                        .query_row(params![track.filepath], |row| row.get(0))
+                        .ok();
                     track.local_lyrics = existing_lyrics;
 
                     // Insert or update DB entry with fresh metadata
@@ -69,7 +109,7 @@ pub async fn scan_directory(path: String) -> Result<Vec<TrackData>, String> {
                             track.local_lyrics
                         ],
                     );
-                    
+
                     tracks.push(track);
                 }
             }
@@ -86,24 +126,46 @@ fn extract_metadata(path: &Path) -> Result<TrackData, String> {
             Err(e) => {
                 eprintln!("Library: Failed to read tags for {:?}: {}", path, e);
                 return Err(format!("Failed to read tagged file: {}", e));
-            },
+            }
         },
         Err(e) => {
             eprintln!("Library: Failed to open {:?}: {}", path, e);
             return Err(format!("Failed to open file: {}", e));
-        },
+        }
     };
 
-    let tag = probe_result.primary_tag().or_else(|| probe_result.first_tag());
+    let tag = probe_result
+        .primary_tag()
+        .or_else(|| probe_result.first_tag());
     let has_tag = tag.is_some();
-    
-    let title = tag.and_then(|t| t.title().as_deref().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
-    let artist = tag.and_then(|t| t.artist().as_deref().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown Artist".into());
-    let album = tag.and_then(|t| t.album().as_deref().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown Album".into());
+
+    let title = tag
+        .and_then(|t| t.title().as_deref().map(|s| s.to_string()))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    let artist = tag
+        .and_then(|t| t.artist().as_deref().map(|s| s.to_string()))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Unknown Artist".into());
+    let album = tag
+        .and_then(|t| t.album().as_deref().map(|s| s.to_string()))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Unknown Album".into());
     let duration_ms = probe_result.properties().duration().as_millis() as u64;
 
-    println!("Library: {:?} => has_tag={}, title='{}', artist='{}', duration={}ms", 
-        path.file_name().unwrap_or_default(), has_tag, title, artist, duration_ms);
+    println!(
+        "Library: {:?} => has_tag={}, title='{}', artist='{}', duration={}ms",
+        path.file_name().unwrap_or_default(),
+        has_tag,
+        title,
+        artist,
+        duration_ms
+    );
 
     Ok(TrackData {
         filepath: path.to_string_lossy().into_owned(),
@@ -117,34 +179,36 @@ fn extract_metadata(path: &Path) -> Result<TrackData, String> {
 }
 
 #[tauri::command]
-pub fn get_cached_tracks() -> Result<Vec<TrackData>, String> {
-    let conn = init_db().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT filepath, title, artist, album, duration_ms, local_lyrics FROM tracks")
+pub fn get_cached_tracks(app: tauri::AppHandle) -> Result<Vec<TrackData>, String> {
+    let conn = init_db(&app).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT filepath, title, artist, album, duration_ms, local_lyrics FROM tracks")
         .map_err(|e| e.to_string())?;
-    
-    let track_iter = stmt.query_map([], |row| {
-        let filepath: String = row.get(0)?;
-        let raw_title: String = row.get(1)?;
-        let title = if raw_title.trim().is_empty() {
-            // Fallback: use filename stem
-            std::path::Path::new(&filepath)
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            raw_title
-        };
-        Ok(TrackData {
-            filepath,
-            title,
-            artist: row.get(2)?,
-            album: row.get(3)?,
-            duration_ms: row.get::<usize, i64>(4)? as u64,
-            source: Some("local".to_string()),
-            local_lyrics: row.get(5)?,
+
+    let track_iter = stmt
+        .query_map([], |row| {
+            let filepath: String = row.get(0)?;
+            let raw_title: String = row.get(1)?;
+            let title = if raw_title.trim().is_empty() {
+                std::path::Path::new(&filepath)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                raw_title
+            };
+            Ok(TrackData {
+                filepath,
+                title,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                duration_ms: row.get::<usize, i64>(4)? as u64,
+                source: Some("local".to_string()),
+                local_lyrics: row.get(5)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
 
     let mut tracks = Vec::new();
     for track in track_iter {
@@ -154,4 +218,14 @@ pub fn get_cached_tracks() -> Result<Vec<TrackData>, String> {
     }
 
     Ok(tracks)
+}
+
+#[tauri::command]
+pub fn clear_library(app: tauri::AppHandle) -> Result<usize, String> {
+    let conn = init_db(&app).map_err(|e| e.to_string())?;
+    let deleted = conn
+        .execute("DELETE FROM tracks", [])
+        .map_err(|e| e.to_string())?;
+    println!("Library: cleared {} local track(s) from index", deleted);
+    Ok(deleted)
 }

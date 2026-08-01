@@ -5,10 +5,11 @@
   "windows": [
     "main"
   ],
-  "permissions": [
+    "permissions": [
     "core:default",
     "opener:default",
     "dialog:default",
+    "shell:default",
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "core:window:allow-set-decorations",

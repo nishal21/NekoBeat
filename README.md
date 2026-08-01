@@ -9,7 +9,7 @@
 [![Tauri](https://img.shields.io/badge/Tauri_v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![React](https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black)](https://react.dev)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-orange.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/kKj8dqq6Je)
 [![Website](https://img.shields.io/badge/Website-FF4088?logo=astro&logoColor=white)](https://nishal21.github.io/NekoBeat-Website/)
 
@@ -116,7 +116,7 @@ Or download manually from the [Releases](https://github.com/nishal21/NekoBeat/re
 
 - **macOS**: Coming soon
 - **Linux**: Coming soon
-- **Android**: Coming soon
+- **Android**: GStreamer Android SDK + Tauri mobile (see `docs/ANDROID_GSTREAMER.md`)
 
 ### Build from Source
 
@@ -197,7 +197,7 @@ Thank you to all the developers and contributors behind these projects.
 
 ## License
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE). Personal use, forks, and other noncommercial work are allowed. Commercial use needs a separate written license from the copyright holder.
 
 ---
 

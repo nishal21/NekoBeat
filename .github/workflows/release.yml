@@ -1,0 +1,323 @@
+# NekoBeat multi-platform release
+# Docs: https://v2.tauri.app/distribute/pipelines/github/
+#
+# Triggers: tag v* or Actions → Release → Run workflow
+#
+# Desktop: Windows (.msi/.exe), Linux (.deb/.AppImage), macOS (.dmg) arm64 + x86_64
+# Android: aarch64 APK (GStreamer Android SDK + existing gen/android)
+#
+# Required for updater signatures (createUpdaterArtifacts: true):
+#   TAURI_SIGNING_PRIVATE_KEY
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (empty string ok if key has no password)
+#
+# Optional Android signing (otherwise debug/unsigned release APK):
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create draft GitHub release'
+        type: boolean
+        default: true
+      build_android:
+        description: 'Also build Android APK'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.macos.conf.json
+              --target aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+          - platform: macos-latest
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.macos.conf.json
+              --target x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.linux.conf.json
+            rust_targets: ''
+          - platform: windows-latest
+            args: --config src-tauri/tauri.desktop.conf.json
+            rust_targets: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Require updater signing secret
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Set repo secret TAURI_SIGNING_PRIVATE_KEY (and optional TAURI_SIGNING_PRIVATE_KEY_PASSWORD)."
+            echo "Private key must match the pubkey in src-tauri/tauri.conf.json (createUpdaterArtifacts is enabled)."
+            exit 1
+          fi
+        shell: bash
+
+      - name: Linux system deps (WebKit + GStreamer)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev \
+            libunwind-dev \
+            libasound2-dev \
+            build-essential \
+            curl wget file \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-tools
+
+      - name: macOS GStreamer
+        if: matrix.platform == 'macos-latest'
+        run: |
+          brew update
+          brew install gstreamer pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix gstreamer)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Windows GStreamer (build-deps EXE + pkg-config)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          # Cached on the NekoBeat build-deps release (reliable vs flaky upstream mirrors)
+          $installerUrl = "https://github.com/nishal21/NekoBeat/releases/download/build-deps/gstreamer-1.0-msvc-x86_64-1.28.1.exe"
+          Write-Host "Downloading GStreamer from GitHub CDN..."
+          Invoke-WebRequest -Uri $installerUrl -OutFile "gstreamer.exe" -UseBasicParsing
+          Write-Host "Installing GStreamer..."
+          Start-Process -FilePath ".\gstreamer.exe" -ArgumentList "/quiet /norestart" -Wait
+
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          if (-not (Test-Path "$root\lib\pkgconfig")) {
+            throw "GStreamer missing pkgconfig at $root"
+          }
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$root\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          choco install pkgconfiglite -y --no-progress
+
+      - name: Fetch yt-dlp + chmod sidecars (Linux / macOS)
+        if: matrix.platform != 'windows-latest'
+        run: |
+          mkdir -p src-tauri/bin
+          OS=$(uname -s)
+          ARCH=$(uname -m)
+          if [ "$OS" = "Darwin" ]; then
+            curl -fsSL --retry 3 -o src-tauri/bin/yt-dlp \
+              https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+          else
+            curl -fsSL --retry 3 -o src-tauri/bin/yt-dlp \
+              https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux
+          fi
+          chmod +x src-tauri/bin/yt-dlp
+          chmod +x src-tauri/binaries/spotiflac-cli-* || true
+          # Fail early if platform sidecar missing (Tauri externalBin)
+          case "$OS-$ARCH" in
+            Darwin-arm64)
+              test -f src-tauri/binaries/spotiflac-cli-aarch64-apple-darwin
+              ;;
+            Darwin-x86_64)
+              test -f src-tauri/binaries/spotiflac-cli-x86_64-apple-darwin
+              ;;
+            Linux-*)
+              test -f src-tauri/binaries/spotiflac-cli-x86_64-unknown-linux-gnu
+              ;;
+          esac
+
+      - name: Ensure Windows yt-dlp
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "src-tauri/bin/yt-dlp.exe")) {
+            curl.exe -fsSL --retry 3 -o src-tauri/bin/yt-dlp.exe `
+              https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+          }
+          if (-not (Test-Path "src-tauri/binaries/spotiflac-cli-x86_64-pc-windows-msvc.exe")) {
+            throw "Missing Windows spotiflac-cli sidecar in src-tauri/binaries/"
+          }
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build & upload (tauri-action)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
+          releaseName: "NekoBeat ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}"
+          releaseBody: |
+            ## NekoBeat
+
+            Installers for this version:
+
+            | Platform | Artifacts |
+            |----------|-----------|
+            | Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
+            | Linux | `.deb` / `.AppImage` |
+            | macOS | `.dmg` (Apple Silicon + Intel) |
+            | Android | APK (separate job; when enabled) |
+
+            See the README for install notes.
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  publish-android:
+    if: github.event_name != 'workflow_dispatch' || inputs.build_android
+    runs-on: ubuntu-22.04
+    # Desktop should still ship if Android SDK/signing is incomplete
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK + platform
+        run: |
+          sdkmanager --install "ndk;28.2.13676358" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Host build helpers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config unzip curl xz-utils
+
+      - name: Download GStreamer Android universal SDK
+        run: |
+          set -euo pipefail
+          VER=1.28.4
+          URL="https://gstreamer.freedesktop.org/data/pkg/android/${VER}/gstreamer-1.0-android-universal-${VER}.tar.xz"
+          mkdir -p "$GITHUB_WORKSPACE/vendor"
+          curl -fsSL --retry 3 -o /tmp/gst-android.tar.xz "$URL"
+          # Tarball top-level is arm64/ armv7/ x86/ x86_64/
+          tar -xJf /tmp/gst-android.tar.xz -C "$GITHUB_WORKSPACE/vendor"
+          test -d "$GITHUB_WORKSPACE/vendor/arm64"
+          test -f "$GITHUB_WORKSPACE/vendor/arm64/lib/libgstreamer-1.0.a"
+          echo "GSTREAMER_ROOT_ANDROID=$GITHUB_WORKSPACE/vendor" >> "$GITHUB_ENV"
+
+      - name: Apply CI Android cargo/pkg-config env
+        run: bash scripts/ci-android-env.sh
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Ensure Android project (gen/)
+        run: |
+          if [ ! -f src-tauri/gen/android/app/build.gradle.kts ]; then
+            echo "::error::src-tauri/gen/android is missing. Commit the patched Android project (GStreamer ndkBuild wiring)."
+            exit 1
+          fi
+
+      - name: Dummy Android sidecars (externalBin placeholders)
+        run: |
+          mkdir -p src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            f="src-tauri/binaries/spotiflac-cli-$t"
+            if [ ! -f "$f" ]; then
+              printf '#!/bin/sh\necho "{}"\n' > "$f"
+              chmod +x "$f"
+            fi
+          done
+
+      - name: Build Android APK (aarch64)
+        env:
+          GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
+        run: npm run tauri:android:build
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nekobeat-android-apk
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/apk/**/*.aab
+          if-no-files-found: warn
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

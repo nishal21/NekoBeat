@@ -15,16 +15,18 @@ dist-ssr
 # Rust
 /target/
 /src-tauri/target/
-Cargo.lock
+# Cargo.lock is committed for reproducible CI (binary app)
 
 
 # Tauri Bundles
 /src-tauri/target/release/bundle/
 /bundle/
 
-# VS Code
+# VS Code / Cursor
 .vscode/*
 !.vscode/extensions.json
+cookies.txt
+.cursor/
 
 # Updater signing keys (NEVER commit the private key!)
 .tauri/nekobeat.key
@@ -33,5 +35,7 @@ latest.json
 # OS
 .DS_Store
 Thumbs.db
+
+docs
 
 

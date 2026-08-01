@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
+use crate::sidecar_util::{self, METADATA_TIMEOUT, SEARCH_TIMEOUT};
 
 #[derive(Serialize)]
 pub struct ExternalTrack {
@@ -16,22 +17,39 @@ pub struct ExternalTrack {
 #[tauri::command]
 pub async fn search_external(app: tauri::AppHandle, query: String, source: String, page: Option<u32>) -> Result<Vec<ExternalTrack>, String> {
     let page = page.unwrap_or(0);
-    if query.contains("spotify.com/track/") {
+        if query.contains("spotify.com/track/") {
         let mut title = "Play Spotify Track".to_string();
         let mut artist = "Spotify".to_string();
         let mut artwork_url = "https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg".to_string();
 
-        use tauri_plugin_shell::ShellExt;
-        if let Ok(cmd) = app.shell().sidecar("spotiflac-cli") {
-            if let Ok(output) = cmd.args([&query, "METADATA"]).output().await {
-                if let Ok(out_str) = String::from_utf8(output.stdout) {
-                    if let Some(json_start) = out_str.find('{') {
-                        let json_str = &out_str[json_start..];
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
-                            if let Some(t) = json["title"].as_str() { title = t.to_string(); }
-                            if let Some(a) = json["artist"].as_str() { artist = a.to_string(); }
-                            if let Some(img) = json["cover"].as_str() { artwork_url = img.to_string(); }
-                        }
+        if let Ok(output) =
+            sidecar_util::run_sidecar(&app, &[&query, "METADATA"], METADATA_TIMEOUT).await
+        {
+            let out_str = String::from_utf8_lossy(&output.stdout);
+            let json_str = sidecar_util::last_json_line(&output.stdout);
+            if !json_str.is_empty() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    if let Some(t) = json["title"].as_str() {
+                        title = t.to_string();
+                    }
+                    if let Some(a) = json["artist"].as_str() {
+                        artist = a.to_string();
+                    }
+                    if let Some(img) = json["cover"].as_str() {
+                        artwork_url = img.to_string();
+                    }
+                }
+            } else if let Some(json_start) = out_str.find('{') {
+                let json_str = &out_str[json_start..];
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if let Some(t) = json["title"].as_str() {
+                        title = t.to_string();
+                    }
+                    if let Some(a) = json["artist"].as_str() {
+                        artist = a.to_string();
+                    }
+                    if let Some(img) = json["cover"].as_str() {
+                        artwork_url = img.to_string();
                     }
                 }
             }
@@ -174,12 +192,7 @@ async fn search_youtube(query: &str, page: u32) -> Result<Vec<ExternalTrack>, St
 }
 
 async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Result<Vec<ExternalTrack>, String> {
-    use tauri_plugin_shell::ShellExt;
-
     println!("Spotify: Searching for: {}", query);
-
-    let cmd = app.shell().sidecar("spotiflac-cli")
-        .map_err(|e| format!("Failed to create sidecar: {}", e))?;
 
     let offset = page * 20;
     let search_arg = if offset > 0 {
@@ -187,22 +200,15 @@ async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Resul
     } else {
         "SEARCH".to_string()
     };
-    let output = cmd.args([query, &search_arg]).output().await
-        .map_err(|e| format!("Spotify search failed: {}", e))?;
+    let output = sidecar_util::run_sidecar(app, &[query, &search_arg], SEARCH_TIMEOUT).await?;
 
-    let out_str = String::from_utf8_lossy(&output.stdout);
-
-    // Find JSON in output (skip any debug lines)
-    let json_str = out_str.lines()
-        .filter(|l| l.trim().starts_with('{'))
-        .last()
-        .unwrap_or("");
+    let json_str = sidecar_util::last_json_line(&output.stdout);
 
     if json_str.is_empty() {
         return Err("No JSON output from Spotify search".to_string());
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(json_str)
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse Spotify search JSON: {}", e))?;
 
     if parsed["success"].as_bool() != Some(true) {
@@ -241,5 +247,8 @@ async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Resul
     }
 
     println!("Spotify: Found {} tracks for '{}'", tracks.len(), query);
+    if tracks.is_empty() {
+        eprintln!("Spotify: SEARCH returned 0 tracks (sidecar OK but empty)");
+    }
     Ok(tracks)
 }
