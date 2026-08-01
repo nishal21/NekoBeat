@@ -344,6 +344,9 @@ jobs:
       - name: Apply CI Android cargo/pkg-config env
         run: bash scripts/ci-android-env.sh
 
+      - name: Prebuild libgstreamer_android.so (Cerbero ndk-build)
+        run: bash scripts/ci-build-gstreamer-android.sh
+
       - name: Install frontend deps
         run: npm ci
 
@@ -364,11 +367,12 @@ jobs:
               chmod +x "$f"
             fi
           done
+          # Prove prebuilt umbrella is present before Gradle (AGP PREBUILT check)
+          test -f src-tauri/android-gst/libs/arm64-v8a/libgstreamer_android.so
 
       - name: Build Android APK (aarch64)
         env:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
-          # Must be empty for GStreamer ndk-build pkg-config (see Android.mk)
           PKG_CONFIG_SYSROOT_DIR: ''
           PKG_CONFIG_PATH: ''
         run: npm run tauri:android:build

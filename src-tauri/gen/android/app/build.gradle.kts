@@ -47,6 +47,8 @@ android {
     sourceSets {
         getByName("main") {
             java.srcDirs("../../../android-gst/java")
+            // Prebuilt umbrella from scripts/ci-build-gstreamer-android.sh
+            jniLibs.srcDirs("../../../android-gst/libs")
         }
     }
     buildTypes {
