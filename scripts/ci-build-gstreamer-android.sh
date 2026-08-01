@@ -68,13 +68,8 @@ if [[ -f "${CXX_CANDIDATES[0]:-}" ]]; then
   cp -f "${CXX_CANDIDATES[0]}" "$GST_DIR/libs/arm64-v8a/libc++_shared.so"
 fi
 
-# Also drop into gen jniLibs so Tauri/Rust packaging sees it early
-JNILIBS="$GST_DIR/../gen/android/app/src/main/jniLibs/arm64-v8a"
-mkdir -p "$JNILIBS"
-cp -f "$GST_DIR/libs/arm64-v8a/libgstreamer_android.so" "$JNILIBS/"
-if [[ -f "$GST_DIR/libs/arm64-v8a/libc++_shared.so" ]]; then
-  cp -f "$GST_DIR/libs/arm64-v8a/libc++_shared.so" "$JNILIBS/"
-fi
+# Only keep .so under android-gst/libs (ndk-build PREBUILT).
+# Do NOT also copy into gen/.../jniLibs — that duplicates and fails the merge.
 
 ls -la "$GST_DIR/libs/arm64-v8a/"
 echo "GStreamer Android umbrella ready → $GST_DIR/libs/arm64-v8a/libgstreamer_android.so"

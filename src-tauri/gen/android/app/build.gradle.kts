@@ -47,8 +47,8 @@ android {
     sourceSets {
         getByName("main") {
             java.srcDirs("../../../android-gst/java")
-            // Prebuilt umbrella from scripts/ci-build-gstreamer-android.sh
-            jniLibs.srcDirs("../../../android-gst/libs")
+            // Do NOT add android-gst/libs here — ndk-build PREBUILT already packages
+            // those .so files; a second jniLibs srcDir causes Duplicate resources.
         }
     }
     buildTypes {

@@ -32,6 +32,14 @@ LOCAL_EXPORT_C_INCLUDES := \
   $(GSTREAMER_ROOT)/lib/glib-2.0/include
 include $(PREBUILT_SHARED_LIBRARY)
 
+# Optional C++ runtime (copied by ci-build-gstreamer-android.sh)
+ifneq ($(wildcard $(LOCAL_PATH)/../libs/$(TARGET_ARCH_ABI)/libc++_shared.so),)
+include $(CLEAR_VARS)
+LOCAL_MODULE := c++_shared
+LOCAL_SRC_FILES := ../libs/$(TARGET_ARCH_ABI)/libc++_shared.so
+include $(PREBUILT_SHARED_LIBRARY)
+endif
+
 include $(CLEAR_VARS)
 LOCAL_MODULE := nekobeat_gst
 LOCAL_SRC_FILES := dummy.c
