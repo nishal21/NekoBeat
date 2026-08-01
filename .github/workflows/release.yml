@@ -103,9 +103,8 @@ jobs:
             exit 1
           fi
           KEY_FILE="${RUNNER_TEMP}/tauri_updater.key"
-          # Secrets ARE loaded — failure "Invalid symbol 10" means a newline (\n) is inside the
-          # base64 body (common when pasting long keys into GitHub). Strip those; keep comment lines.
           export KEY_FILE
+          # Strip mid-key newlines (GitHub paste → "Invalid symbol 10"), keep comment lines.
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -116,14 +115,16 @@ jobs:
                   comments.append(line)
               else:
                   body.append(line)
-          # Remove whitespace/newlines from base64 payload only
           payload = "".join(body).replace(" ", "").replace("\t", "")
+          if not payload:
+              raise SystemExit("private key base64 body is empty after sanitize")
           out = "\n".join(comments + [payload]) + "\n"
           Path(os.environ["KEY_FILE"]).write_text(out, encoding="utf-8")
-          print(f"updater key: {len(comments)} comment line(s), base64 len={len(payload)}")
+          print(f"updater key file ready: comments={len(comments)} base64_len={len(payload)}")
           PY
-          # Use PATH var so Tauri does not treat a filesystem path as key text
-          echo "TAURI_SIGNING_PRIVATE_KEY_PATH=${KEY_FILE}" >> "$GITHUB_ENV"
+          # tauri build only reads TAURI_SIGNING_PRIVATE_KEY (path OR contents).
+          # PATH-only env is ignored by `tauri build` → "public key found, but no private key".
+          echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
 
       - name: Linux system deps (WebKit + GStreamer)
@@ -301,7 +302,16 @@ jobs:
           tar -xJf /tmp/gst-android.tar.xz -C "$GITHUB_WORKSPACE/vendor"
           test -d "$GITHUB_WORKSPACE/vendor/arm64"
           test -f "$GITHUB_WORKSPACE/vendor/arm64/lib/libgstreamer-1.0.a"
+          test -f "$GITHUB_WORKSPACE/vendor/arm64/include/gstreamer-1.0/gst/gst.h"
           echo "GSTREAMER_ROOT_ANDROID=$GITHUB_WORKSPACE/vendor" >> "$GITHUB_ENV"
+          # Pin NDK for Gradle so ndk-build matches what we installed (avoid auto NDK 27)
+          mkdir -p src-tauri/gen/android
+          {
+            echo "sdk.dir=$ANDROID_HOME"
+            echo "ndk.dir=$ANDROID_HOME/ndk/28.2.13676358"
+          } > src-tauri/gen/android/local.properties
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
       - name: Apply CI Android cargo/pkg-config env
         run: bash scripts/ci-android-env.sh
