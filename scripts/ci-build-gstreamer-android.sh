@@ -64,19 +64,23 @@ if [[ "$(realpath "$SO")" != "$(realpath "$DEST")" ]]; then
 fi
 SO="$DEST"
 JNILIBS="$GST_DIR/../gen/android/app/src/main/jniLibs/arm64-v8a"
-mkdir -p "$JNILIBS"
+LINKDIR="$GST_DIR/link/arm64-v8a"
+mkdir -p "$JNILIBS" "$LINKDIR"
 cp -f "$SO" "$JNILIBS/libgstreamer_android.so"
+cp -f "$SO" "$LINKDIR/libgstreamer_android.so"
 
 # Optional C++ runtime often required alongside umbrella
 CXX_CANDIDATES=( "$NDK"/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so )
 if [[ -f "${CXX_CANDIDATES[0]:-}" ]]; then
   cp -f "${CXX_CANDIDATES[0]}" "$JNILIBS/libc++_shared.so"
+  cp -f "${CXX_CANDIDATES[0]}" "$LINKDIR/libc++_shared.so"
 fi
 
 # Strip packaging copies out of android-gst/libs (AGP merges this dir from ndk-build).
 # Keep only the marker so Android.mk takes the stub path during Gradle.
+# Cargo links via android-gst/link/ (see build.rs) — not via libs/.
 find "$GST_DIR/libs/arm64-v8a" -type f \( -name '*.so' -o -name '*.a' \) -delete 2>/dev/null || true
 touch "$GST_DIR/libs/arm64-v8a/.use_prebuilt_gst"
 
-ls -la "$GST_DIR/libs/arm64-v8a/" "$JNILIBS/"
+ls -la "$GST_DIR/libs/arm64-v8a/" "$LINKDIR/" "$JNILIBS/"
 echo "GStreamer Android umbrella ready → $JNILIBS/libgstreamer_android.so"

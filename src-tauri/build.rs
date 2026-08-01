@@ -98,9 +98,22 @@ fn android_gstreamer_hints() {
         manifest_dir.replace('\\', "/"),
         ndk_abi
     );
+    // Link-only copy from CI prebuild (not packaged by AGP — avoids Duplicate resources)
+    let gst_android_link = format!(
+        "{}/android-gst/link/{}",
+        manifest_dir.replace('\\', "/"),
+        ndk_abi
+    );
+    let jni_libs = format!(
+        "{}/gen/android/app/src/main/jniLibs/{}",
+        manifest_dir.replace('\\', "/"),
+        ndk_abi
+    );
 
     println!("cargo:rerun-if-env-changed=GSTREAMER_ROOT_ANDROID");
     println!("cargo:rustc-link-search=native={}", lib_dir);
+    println!("cargo:rustc-link-search=native={}", gst_android_link);
+    println!("cargo:rustc-link-search=native={}", jni_libs);
     println!("cargo:rustc-link-search=native={}", gst_android_libs);
     println!("cargo:rustc-link-search=native={}", gst_android_build);
     println!("cargo:rustc-link-lib=dylib=gstreamer_android");

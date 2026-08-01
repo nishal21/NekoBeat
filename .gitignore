@@ -36,6 +36,7 @@ latest.json
 
 # CI-built GStreamer Android umbrella (.so)
 src-tauri/android-gst/libs/
+src-tauri/android-gst/link/
 src-tauri/android-gst/obj/
 src-tauri/android-gst/jni/gst-android-build/
 
