@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build libgstreamer_android.so with standalone ndk-build, then copy into
-# android-gst/libs/<abi>/ so Gradle can use a real PREBUILT_SHARED_LIBRARY.
+# Build libgstreamer_android.so with standalone ndk-build, then install into
+# gen/.../jniLibs only (Tauri packaging path). Leave a marker under
+# android-gst/libs so Gradle Android.mk skips Cerbero + PREBUILT packaging.
 set -euo pipefail
 
 ROOT="${GSTREAMER_ROOT_ANDROID:-}"
@@ -62,14 +63,20 @@ if [[ "$(realpath "$SO")" != "$(realpath "$DEST")" ]]; then
   cp -f "$SO" "$DEST"
 fi
 SO="$DEST"
+JNILIBS="$GST_DIR/../gen/android/app/src/main/jniLibs/arm64-v8a"
+mkdir -p "$JNILIBS"
+cp -f "$SO" "$JNILIBS/libgstreamer_android.so"
+
 # Optional C++ runtime often required alongside umbrella
 CXX_CANDIDATES=( "$NDK"/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so )
 if [[ -f "${CXX_CANDIDATES[0]:-}" ]]; then
-  cp -f "${CXX_CANDIDATES[0]}" "$GST_DIR/libs/arm64-v8a/libc++_shared.so"
+  cp -f "${CXX_CANDIDATES[0]}" "$JNILIBS/libc++_shared.so"
 fi
 
-# Only keep .so under android-gst/libs (ndk-build PREBUILT).
-# Do NOT also copy into gen/.../jniLibs — that duplicates and fails the merge.
+# Strip packaging copies out of android-gst/libs (AGP merges this dir from ndk-build).
+# Keep only the marker so Android.mk takes the stub path during Gradle.
+find "$GST_DIR/libs/arm64-v8a" -type f \( -name '*.so' -o -name '*.a' \) -delete 2>/dev/null || true
+touch "$GST_DIR/libs/arm64-v8a/.use_prebuilt_gst"
 
-ls -la "$GST_DIR/libs/arm64-v8a/"
-echo "GStreamer Android umbrella ready → $GST_DIR/libs/arm64-v8a/libgstreamer_android.so"
+ls -la "$GST_DIR/libs/arm64-v8a/" "$JNILIBS/"
+echo "GStreamer Android umbrella ready → $JNILIBS/libgstreamer_android.so"

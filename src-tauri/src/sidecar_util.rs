@@ -73,6 +73,8 @@ async fn run_sidecar_fs(args: &[&str], timeout: Duration) -> Result<SidecarOutpu
 
 fn find_spotiflac_cli() -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    // Used on desktop target cfgs below; unused on Android/iOS.
+    #[cfg_attr(any(target_os = "android", target_os = "ios"), allow(unused_variables))]
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     if let Ok(exe) = std::env::current_exe() {

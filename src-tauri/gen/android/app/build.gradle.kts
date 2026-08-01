@@ -47,8 +47,17 @@ android {
     sourceSets {
         getByName("main") {
             java.srcDirs("../../../android-gst/java")
-            // Do NOT add android-gst/libs here — ndk-build PREBUILT already packages
-            // those .so files; a second jniLibs srcDir causes Duplicate resources.
+            // Umbrella .so is installed under src/main/jniLibs by CI prebuild.
+            // Do NOT add android-gst/libs as jniLibs — Duplicate resources.
+        }
+    }
+    packaging {
+        jniLibs {
+            // Safety net if Tauri + ndk-build both emit the same .so
+            pickFirsts += listOf(
+                "**/libgstreamer_android.so",
+                "**/libc++_shared.so",
+            )
         }
     }
     buildTypes {
@@ -57,7 +66,8 @@ android {
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
-            packaging {                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+            packaging {
+                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
                 jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86_64/*.so")

@@ -367,19 +367,18 @@ jobs:
               chmod +x "$f"
             fi
           done
-          # Prove prebuilt umbrella is present before Gradle (AGP PREBUILT check)
-          test -f src-tauri/android-gst/libs/arm64-v8a/libgstreamer_android.so
+          # Umbrella lives in gen jniLibs; marker tells Android.mk to skip Cerbero/PREBUILT
+          test -f src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libgstreamer_android.so
+          test -f src-tauri/android-gst/libs/arm64-v8a/.use_prebuilt_gst
+          # Must not also sit under android-gst/libs (Duplicate resources vs jniLibs)
+          test ! -f src-tauri/android-gst/libs/arm64-v8a/libgstreamer_android.so
 
       - name: Build Android APK (aarch64)
         env:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
           PKG_CONFIG_SYSROOT_DIR: ''
           PKG_CONFIG_PATH: ''
-        run: |
-          # Clear any leftover duplicates from older CI copies
-          rm -f src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libgstreamer_android.so
-          rm -f src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so
-          npm run tauri:android:build
+        run: npm run tauri:android:build
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

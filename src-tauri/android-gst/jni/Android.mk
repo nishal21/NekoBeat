@@ -16,40 +16,22 @@ else
   $(error Unsupported TARGET_ARCH_ABI: $(TARGET_ARCH_ABI))
 endif
 
-GST_PREBUILT_SO := $(LOCAL_PATH)/../libs/$(TARGET_ARCH_ABI)/libgstreamer_android.so
+# Marker written by scripts/ci-build-gstreamer-android.sh after the umbrella is copied
+# into gen/.../jniLibs. Real .so must NOT stay under android-gst/libs or AGP merges
+# them twice (with Tauri's jniLibs copy) → Duplicate resources.
+GST_PREBUILT_MARKER := $(LOCAL_PATH)/../libs/$(TARGET_ARCH_ABI)/.use_prebuilt_gst
 
-# Prefer a real PREBUILT for Android Gradle Plugin (AGP checks the .so exists).
-# CI builds the umbrella .so first via scripts/ci-build-gstreamer-android.sh.
-ifneq ($(wildcard $(GST_PREBUILT_SO)),)
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := gstreamer_android
-LOCAL_SRC_FILES := ../libs/$(TARGET_ARCH_ABI)/libgstreamer_android.so
-LOCAL_EXPORT_C_INCLUDES := \
-  $(GSTREAMER_ROOT)/include \
-  $(GSTREAMER_ROOT)/include/gstreamer-1.0 \
-  $(GSTREAMER_ROOT)/include/glib-2.0 \
-  $(GSTREAMER_ROOT)/lib/glib-2.0/include
-include $(PREBUILT_SHARED_LIBRARY)
-
-# Optional C++ runtime (copied by ci-build-gstreamer-android.sh)
-ifneq ($(wildcard $(LOCAL_PATH)/../libs/$(TARGET_ARCH_ABI)/libc++_shared.so),)
-include $(CLEAR_VARS)
-LOCAL_MODULE := c++_shared
-LOCAL_SRC_FILES := ../libs/$(TARGET_ARCH_ABI)/libc++_shared.so
-include $(PREBUILT_SHARED_LIBRARY)
-endif
+ifneq ($(wildcard $(GST_PREBUILT_MARKER)),)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := nekobeat_gst
 LOCAL_SRC_FILES := dummy.c
-LOCAL_SHARED_LIBRARIES := gstreamer_android
 LOCAL_LDLIBS := -llog -landroid
 include $(BUILD_SHARED_LIBRARY)
 
 else
 
-# Standalone ndk-build path (no libs/ yet) — full Cerbero umbrella build
+# Standalone ndk-build (scripts/ci-build-gstreamer-android.sh) — full Cerbero umbrella
 unexport PKG_CONFIG_SYSROOT_DIR
 unexport PKG_CONFIG_PATH
 export PKG_CONFIG_LIBDIR := $(GSTREAMER_ROOT)/lib/pkgconfig
