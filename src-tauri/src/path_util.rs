@@ -31,14 +31,37 @@ pub fn resolve_playable_local_path(path: &str) -> Result<PathBuf, String> {
     }
 
     // Allow file:/// URIs passed as paths
-    if trimmed.starts_with("file://") {
-        let stripped = trimmed
-            .strip_prefix("file:///")
-            .or_else(|| trimmed.strip_prefix("file://"))
-            .unwrap_or(trimmed);
-        let decoded = PathBuf::from(stripped);
-        if decoded.exists() {
-            return decoded.canonicalize().map_err(|e| e.to_string());
+    if trimmed.starts_with("file:") {
+        if let Ok(u) = url::Url::parse(trimmed) {
+            if let Ok(decoded) = u.to_file_path() {
+                if decoded.exists() {
+                    return decoded.canonicalize().map_err(|e| e.to_string());
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Some(rest) = trimmed.strip_prefix("file://") {
+                let path = if rest.starts_with('/') {
+                    PathBuf::from(rest)
+                } else {
+                    PathBuf::from(format!("/{}", rest))
+                };
+                if path.exists() {
+                    return path.canonicalize().map_err(|e| e.to_string());
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            let stripped = trimmed
+                .strip_prefix("file:///")
+                .or_else(|| trimmed.strip_prefix("file://"))
+                .unwrap_or(trimmed);
+            let decoded = PathBuf::from(stripped);
+            if decoded.exists() {
+                return decoded.canonicalize().map_err(|e| e.to_string());
+            }
         }
     }
 

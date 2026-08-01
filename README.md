@@ -116,7 +116,7 @@ Or download manually from the [Releases](https://github.com/nishal21/NekoBeat/re
 
 - **macOS**: Coming soon
 - **Linux**: Coming soon
-- **Android**: GStreamer Android SDK + Tauri mobile (see `docs/ANDROID_GSTREAMER.md`)
+- **Android**: GStreamer Android SDK + Tauri mobile; bundled SpotiFLAC + ffmpeg + yt-dlp
 
 ### Build from Source
 

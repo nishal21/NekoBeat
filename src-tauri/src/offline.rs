@@ -51,30 +51,65 @@ fn local_path_from_stream_url(url: Option<&str>) -> Option<PathBuf> {
         return None;
     }
 
-    let mut path_str = raw
-        .strip_prefix("file:///")
-        .or_else(|| raw.strip_prefix("file://"))
-        .unwrap_or(raw)
-        .to_string();
+    // Prefer proper URI parsing (correct on Android/Linux — never force `\`)
+    if raw.starts_with("file:") {
+        if let Ok(parsed) = url::Url::parse(raw) {
+            if let Ok(path) = parsed.to_file_path() {
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // Manual fallback: file:///data/... → /data/...
+            if let Some(rest) = raw.strip_prefix("file://") {
+                let path = if rest.starts_with('/') {
+                    PathBuf::from(rest)
+                } else {
+                    PathBuf::from(format!("/{}", rest))
+                };
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+    }
 
-    // Windows extended path \\?\C:\... or URI-encoded form
-    if let Some(rest) = path_str.strip_prefix("//?/") {
-        path_str = rest.to_string();
-    }
-    if let Some(rest) = path_str.strip_prefix(r"\\?\") {
-        path_str = rest.to_string();
-    }
-    path_str = path_str.replace('/', r"\");
+    #[cfg(windows)]
+    {
+        let mut path_str = raw
+            .strip_prefix("file:///")
+            .or_else(|| raw.strip_prefix("file://"))
+            .unwrap_or(raw)
+            .to_string();
 
-    let path = PathBuf::from(&path_str);
-    if path.is_file() {
-        return Some(path);
+        if let Some(rest) = path_str.strip_prefix("//?/") {
+            path_str = rest.to_string();
+        }
+        if let Some(rest) = path_str.strip_prefix(r"\\?\") {
+            path_str = rest.to_string();
+        }
+        path_str = path_str.replace('/', r"\");
+
+        let path = PathBuf::from(&path_str);
+        if path.is_file() {
+            return Some(path);
+        }
+        let alt = PathBuf::from(path_str.replace('\\', "/"));
+        if alt.is_file() {
+            return Some(alt);
+        }
     }
-    // Also try forward-slash form (WSL / some URIs)
-    let alt = PathBuf::from(path_str.replace('\\', "/"));
-    if alt.is_file() {
-        return Some(alt);
+
+    #[cfg(not(windows))]
+    {
+        let path = PathBuf::from(raw);
+        if path.is_file() {
+            return Some(path);
+        }
     }
+
     None
 }
 

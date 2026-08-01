@@ -405,10 +405,23 @@ pub async fn stream_external_audio(
                     .and_then(|u| u.to_file_path().ok())
                     .map(|p| p.to_string_lossy().to_string())
                     .or_else(|| {
-                        actual_url
-                            .strip_prefix("file:///")
-                            .or_else(|| actual_url.strip_prefix("file://"))
-                            .map(|s| s.to_string())
+                        #[cfg(windows)]
+                        {
+                            actual_url
+                                .strip_prefix("file:///")
+                                .or_else(|| actual_url.strip_prefix("file://"))
+                                .map(|s| s.replace('/', "\\"))
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            actual_url.strip_prefix("file://").map(|rest| {
+                                if rest.starts_with('/') {
+                                    rest.to_string()
+                                } else {
+                                    format!("/{}", rest)
+                                }
+                            })
+                        }
                     })
                     .ok_or_else(|| format!("Invalid file URI: {}", actual_url))?;
                 state

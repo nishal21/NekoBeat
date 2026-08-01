@@ -7,6 +7,7 @@ pub mod news;
 pub mod process_util;
 pub mod path_util;
 pub mod sidecar_util;
+pub mod android_bin;
 pub mod gst_init;
 
 #[cfg(not(mobile))]
@@ -50,6 +51,7 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             gst_init::ensure_initialized();
+            android_bin::ensure_android_sidecars(app.handle());
 
             let audio_state = audio::init_audio_thread(app.handle().clone());
             app.manage(audio_state);

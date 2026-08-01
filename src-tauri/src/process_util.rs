@@ -35,8 +35,13 @@ pub async fn run_silent_timeout(
     }
 }
 
-/// Cross-platform yt-dlp discovery (bundled + PATH).
+/// Cross-platform yt-dlp discovery (bundled + PATH). Prefer `android_bin::find_ytdlp` on mobile.
 pub fn find_ytdlp() -> Result<PathBuf, String> {
+    crate::android_bin::find_ytdlp()
+}
+
+/// Desktop / PATH / bundled yt-dlp (no Android filesDir).
+pub fn find_ytdlp_desktop() -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -50,6 +55,7 @@ pub fn find_ytdlp() -> Result<PathBuf, String> {
             candidates.push(exe_dir.join("yt-dlp"));
             candidates.push(exe_dir.join("bin").join("yt-dlp"));
             candidates.push(exe_dir.join("resources").join("bin").join("yt-dlp"));
+            candidates.push(exe_dir.join("libytdlp.so"));
         }
     }
 

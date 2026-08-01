@@ -768,11 +768,10 @@ export function useAggregatorSearch() {
             if (ytResults.status === 'rejected') errs.youtube = String(ytResults.reason);
             if (scResults.status === 'rejected') errs.soundcloud = String(scResults.reason);
             if (spResults.status === 'rejected') {
-                errs.spotify = String(spResults.reason);
-            } else if (sp.length === 0 && page === 0) {
-                // Sidecar may be missing — empty Spotify on first page is suspicious when others return hits
-                if (yt.length + sc.length > 0) {
-                    errs.spotify = 'No Spotify results (rebuild spotiflac-cli sidecar if this persists)';
+                const reason = String(spResults.reason);
+                // Soft-skip missing Spotify helper (esp. Android) — don't scare the user
+                if (!/not found|unavailable|mobile|soft-skip/i.test(reason)) {
+                    errs.spotify = reason;
                 }
             }
             setSourceErrors(errs);
@@ -1119,16 +1118,19 @@ export function useLikedLibrary() {
         }
 
         let streamUrlForLike = canonicalUrl;
-        const local = (playingLocalPath || '').trim();
+        let local = (playingLocalPath || '').trim();
         if (local && !/^https?:\/\//i.test(local) && !local.includes('googlevideo') && !local.includes('spotify.com')) {
-            // Strip Windows \\?\ prefix and normalize to file:/// URI
-            const cleaned = local
-                .replace(/^\\\\\?\\/, '')
-                .replace(/^\/\/\?\//, '')
-                .replace(/\\/g, '/');
-            streamUrlForLike = cleaned.startsWith('file:')
-                ? cleaned
-                : `file:///${cleaned.replace(/^\/+/, '')}`;
+            if (local.startsWith('file:')) {
+                streamUrlForLike = local;
+            } else if (/^[a-zA-Z]:[\\/]/.test(local) || local.startsWith('\\\\')) {
+                // Windows absolute path → file:///C:/...
+                const cleaned = local.replace(/^\\\\\?\\/, '').replace(/\\/g, '/');
+                streamUrlForLike = `file:///${cleaned}`;
+            } else {
+                // Unix/Android absolute path → file:///data/...
+                const abs = local.startsWith('/') ? local : `/${local}`;
+                streamUrlForLike = `file://${abs}`;
+            }
         }
 
         setIsLiking(prev => ({ ...prev, [trackId]: true }));

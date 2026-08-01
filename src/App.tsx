@@ -1468,8 +1468,8 @@ function App() {
         message: track.source === 'soundcloud' 
           ? `"${trackTitle}" could not be played from SoundCloud (or YouTube fallback).`
           : track.source === 'spotify'
-            ? `Failed to play "${trackTitle}" from Spotify. Check spotiflac-cli sidecar / network.`
-            : `Failed to stream "${trackTitle}". The track may be unavailable.`,
+            ? `Failed to play "${trackTitle}". Spotify HiFi needs desktop; try YouTube results.`
+            : `Failed to stream "${trackTitle}". Check network and try again.`,
         trackTitle,
         trackArtist,
         source: track.source
@@ -2354,8 +2354,8 @@ function App() {
                         <span className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">{searchError}</span>
                       )}
                       {Object.entries(sourceErrors).map(([src, msg]) => (
-                        <span key={src} className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-lg capitalize">
-                          {src}: {msg.replace(/^Error:\s*/i, '').slice(0, 80)}
+                        <span key={src} className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-lg">
+                          <span className="capitalize">{src}</span>: {msg.replace(/^Error:\s*/i, '').slice(0, 80)}
                         </span>
                       ))}
                     </div>

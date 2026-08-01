@@ -359,16 +359,20 @@ jobs:
             exit 1
           fi
 
-      - name: Dummy Android sidecars (externalBin placeholders)
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Build SpotiFLAC Android sidecars
+        run: bash scripts/build-spotiflac-android.sh
+
+      - name: Fetch Android ffmpeg + yt-dlp
+        run: bash scripts/fetch-android-native-tools.sh
+
+      - name: Sync Android sidecars into jniLibs
         run: |
-          mkdir -p src-tauri/binaries
-          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
-            f="src-tauri/binaries/spotiflac-cli-$t"
-            if [ ! -f "$f" ]; then
-              printf '#!/bin/sh\necho "{}"\n' > "$f"
-              chmod +x "$f"
-            fi
-          done
+          bash scripts/sync-android-sidecars.sh
           # Umbrella lives in gen jniLibs; link/ is for cargo; marker skips Cerbero/PREBUILT
           test -f src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libgstreamer_android.so
           test -f src-tauri/android-gst/link/arm64-v8a/libgstreamer_android.so

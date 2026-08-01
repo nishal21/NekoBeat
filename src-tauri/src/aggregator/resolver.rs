@@ -136,80 +136,164 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
         return Ok(crate::path_util::path_to_file_uri(&existing));
     }
 
-    let ytdlp_path = crate::process_util::find_ytdlp()?;
-    let out_tmpl = cache_dir
-        .join(format!("{}.%(ext)s", video_id))
-        .to_string_lossy()
-        .to_string();
-
-    println!(
-        "YouTube: Downloading via yt-dlp to cache (id={}) — soup CDN stream broken on this build",
-        video_id
-    );
-
-    // tv_embedded often yields smaller audio-only; android as fallback (progressive mp4).
+    let ytdlp = crate::process_util::find_ytdlp();
     let mut last_err = String::new();
-    for client in ["tv_embedded", "android"] {
-        // Clean partials from a previous failed attempt
-        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(&video_id)
-                    && (name.ends_with(".part") || name.ends_with(".ytdl"))
-                {
-                    let _ = std::fs::remove_file(entry.path());
+
+    if let Ok(ytdlp_path) = ytdlp {
+        let out_tmpl = cache_dir
+            .join(format!("{}.%(ext)s", video_id))
+            .to_string_lossy()
+            .to_string();
+
+        println!(
+            "YouTube: Downloading via yt-dlp to cache (id={}) — soup CDN stream broken on this build",
+            video_id
+        );
+
+        // tv_embedded often yields smaller audio-only; android as fallback (progressive mp4).
+        for client in ["tv_embedded", "android"] {
+            // Clean partials from a previous failed attempt
+            if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with(&video_id)
+                        && (name.ends_with(".part") || name.ends_with(".ytdl"))
+                    {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+
+            let args = vec![
+                "-f".into(),
+                "ba/bestaudio/best".into(),
+                "--no-warnings".into(),
+                "--no-playlist".into(),
+                "--extractor-args".into(),
+                format!("youtube:player_client={}", client),
+                "-o".into(),
+                out_tmpl.clone(),
+                "--".into(),
+                url.to_string(),
+            ];
+
+            let mut cmd = tokio::process::Command::new(&ytdlp_path);
+            cmd.args(&args);
+            match crate::process_util::run_silent_timeout(cmd, std::time::Duration::from_secs(180))
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    if let Some(path) = find_cached_yt_file(&cache_dir, &video_id) {
+                        println!(
+                            "YouTube: Downloaded via {} → {:?} ({} bytes)",
+                            client,
+                            path,
+                            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                        );
+                        return Ok(crate::path_util::path_to_file_uri(&path));
+                    }
+                    last_err = format!("yt-dlp {} succeeded but cache file missing", client);
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    last_err = format!("{} | {}", stderr, stdout);
+                    println!(
+                        "YouTube: yt-dlp {} download failed: {}",
+                        client,
+                        &last_err[..std::cmp::min(last_err.len(), 200)]
+                    );
+                }
+                Err(e) => {
+                    last_err = e;
+                    println!("YouTube: yt-dlp {} error: {}", client, last_err);
                 }
             }
         }
+    } else if let Err(e) = ytdlp {
+        last_err = e;
+        println!(
+            "YouTube: yt-dlp missing ({}) — trying in-process rusty_ytdl",
+            last_err
+        );
+    }
 
-        let args = vec![
-            "-f".into(),
-            "ba/bestaudio/best".into(),
-            "--no-warnings".into(),
-            "--no-playlist".into(),
-            "--extractor-args".into(),
-            format!("youtube:player_client={}", client),
-            "-o".into(),
-            out_tmpl.clone(),
-            "--".into(),
-            url.to_string(),
-        ];
-
-        let mut cmd = tokio::process::Command::new(&ytdlp_path);
-        cmd.args(&args);
-        match crate::process_util::run_silent_timeout(cmd, std::time::Duration::from_secs(180))
-            .await
-        {
-            Ok(output) if output.status.success() => {
-                if let Some(path) = find_cached_yt_file(&cache_dir, &video_id) {
-                    println!(
-                        "YouTube: Downloaded via {} → {:?} ({} bytes)",
-                        client,
-                        path,
-                        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-                    );
-                    return Ok(crate::path_util::path_to_file_uri(&path));
-                }
-                last_err = format!("yt-dlp {} succeeded but cache file missing", client);
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                last_err = format!("{} | {}", stderr, stdout);
-                println!(
-                    "YouTube: yt-dlp {} download failed: {}",
-                    client,
-                    &last_err[..std::cmp::min(last_err.len(), 200)]
-                );
-            }
-            Err(e) => {
+    // In-process fallback (critical on Android where yt-dlp is not bundled)
+    match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
+        Ok(uri) => return Ok(uri),
+        Err(e) => {
+            if last_err.is_empty() {
                 last_err = e;
-                println!("YouTube: yt-dlp {} error: {}", client, last_err);
+            } else {
+                last_err = format!("{}; rusty_ytdl: {}", last_err, e);
             }
         }
     }
 
     Err(format!("YouTube download failed: {}", last_err))
+}
+
+/// Download YouTube audio with rusty_ytdl (no external binary).
+async fn resolve_youtube_rusty(
+    cache_dir: &Path,
+    url: &str,
+    video_id: &str,
+) -> Result<String, String> {
+    use rusty_ytdl::{Video, VideoOptions, VideoQuality, VideoSearchOptions};
+
+    println!("YouTube: rusty_ytdl download for {}", video_id);
+
+    let options = VideoOptions {
+        quality: VideoQuality::HighestAudio,
+        filter: VideoSearchOptions::Audio,
+        ..Default::default()
+    };
+
+    let video = Video::new_with_options(url, options)
+        .map_err(|e| format!("init failed: {}", e))?;
+
+    // Prefer container from format info when available
+    let mut ext = "webm".to_string();
+    if let Ok(info) = video.get_info().await {
+        if let Some(fmt) = info
+            .formats
+            .iter()
+            .find(|f| f.has_audio && !f.has_video)
+            .or_else(|| info.formats.iter().find(|f| f.has_audio))
+        {
+            let c = fmt.mime_type.container.trim();
+            if !c.is_empty() {
+                ext = if c == "mp4" {
+                    "m4a".to_string()
+                } else {
+                    c.to_string()
+                };
+            }
+        }
+    }
+
+    let out_path = cache_dir.join(format!("{}.{}", video_id, ext));
+    // Remove stale partial
+    let _ = std::fs::remove_file(&out_path);
+
+    video
+        .download(&out_path)
+        .await
+        .map_err(|e| format!("download failed: {}", e))?;
+
+    if let Ok(meta) = std::fs::metadata(&out_path) {
+        if meta.len() > 50_000 {
+            println!(
+                "YouTube: rusty_ytdl saved {:?} ({} bytes)",
+                out_path,
+                meta.len()
+            );
+            return Ok(crate::path_util::path_to_file_uri(&out_path));
+        }
+    }
+
+    let _ = std::fs::remove_file(&out_path);
+    Err("downloaded file missing or too small".into())
 }
 
 /// Resolve a YouTube search query → download top hit → local file URI.
@@ -304,10 +388,17 @@ pub async fn resolve_youtube_search(app: &AppHandle, query: &str) -> Result<Stri
         );
     }
 
-    // Last resort: yt-dlp search + download
-    println!("YouTube Search: yt-dlp ytsearch1 download fallback...");
-    let search_url = format!("ytsearch1:{}", query);
-    resolve_youtube_download(app, &search_url).await
+    // Last resort: yt-dlp search + download (skipped when yt-dlp missing)
+    if crate::process_util::find_ytdlp().is_ok() {
+        println!("YouTube Search: yt-dlp ytsearch1 download fallback...");
+        let search_url = format!("ytsearch1:{}", query);
+        return resolve_youtube_download(app, &search_url).await;
+    }
+
+    Err(format!(
+        "YouTube Search: no results for '{}'",
+        query
+    ))
 }
 
 fn sc_track_id(url: &str) -> String {

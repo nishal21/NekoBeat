@@ -200,12 +200,23 @@ async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Resul
     } else {
         "SEARCH".to_string()
     };
-    let output = sidecar_util::run_sidecar(app, &[query, &search_arg], SEARCH_TIMEOUT).await?;
+    let output = match sidecar_util::run_sidecar(app, &[query, &search_arg], SEARCH_TIMEOUT).await {
+        Ok(o) => o,
+        Err(e) => {
+            let lower = e.to_lowercase();
+            if lower.contains("not found") || lower.contains("unavailable") || lower.contains("missing") {
+                println!("Spotify: soft-skip — {}", e);
+                return Ok(vec![]);
+            }
+            return Err(e);
+        }
+    };
 
     let json_str = sidecar_util::last_json_line(&output.stdout);
 
     if json_str.is_empty() {
-        return Err("No JSON output from Spotify search".to_string());
+        println!("Spotify: empty sidecar output — soft-skip");
+        return Ok(vec![]);
     }
 
     let parsed: serde_json::Value = serde_json::from_str(&json_str)
@@ -213,6 +224,11 @@ async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Resul
 
     if parsed["success"].as_bool() != Some(true) {
         let err_msg = parsed["error"].as_str().unwrap_or("Unknown error");
+        let lower = err_msg.to_lowercase();
+        if lower.contains("not found") || lower.contains("unavailable") || lower.contains("dummy") {
+            println!("Spotify: soft-skip — {}", err_msg);
+            return Ok(vec![]);
+        }
         return Err(format!("Spotify search error: {}", err_msg));
     }
 
