@@ -1,3 +1,4 @@
+import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -60,6 +61,22 @@ android {
             )
         }
     }
+    signingConfigs {
+        create("release") {
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
+            val keystoreProperties = Properties()
+            check(keystorePropertiesFile.exists()) {
+                "Missing keystore.properties — run scripts/ci-android-signing.sh first."
+            }
+            keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+            keyAlias = keystoreProperties["keyAlias"] as String
+            val pass = keystoreProperties["password"] as String
+            keyPassword = (keystoreProperties["keyPassword"] as String?) ?: pass
+            storePassword = pass
+            // storeFile is relative to this app module directory
+            storeFile = file(keystoreProperties["storeFile"] as String)
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -74,7 +91,9 @@ android {
             }
         }
         getByName("release") {
-            isMinifyEnabled = true
+            // Sideload APKs: keep minify off until ProGuard keep rules are solid
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

@@ -10,8 +10,9 @@
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD = password used with `tauri signer generate -p`
 #   (Password is REQUIRED in CI — passwordless keys fail non-interactively.)
 #
-# Optional Android signing:
+# Android APK signing (sideload / Play):
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   If unset, CI generates an ephemeral keystore (uninstall old APK between runs).
 
 name: Release
 
@@ -375,6 +376,17 @@ jobs:
           # Must not also sit under android-gst/libs (Duplicate resources vs jniLibs)
           test ! -f src-tauri/android-gst/libs/arm64-v8a/libgstreamer_android.so
 
+      - name: Sync Android launcher icons (brand)
+        run: bash scripts/sync-android-icons.sh
+
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/ci-android-signing.sh
+
       - name: Build Android APK (aarch64)
         env:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
@@ -382,12 +394,30 @@ jobs:
           PKG_CONFIG_PATH: ''
         run: npm run tauri:android:build
 
+      - name: Verify APK is signed (not *-unsigned)
+        run: |
+          set -euo pipefail
+          mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | sort)
+          if [[ ${#APKS[@]} -eq 0 ]]; then
+            echo "::error::No APK produced"
+            exit 1
+          fi
+          for apk in "${APKS[@]}"; do
+            echo "APK: $apk"
+            if [[ "$apk" == *unsigned* ]]; then
+              echo "::error::Unsigned APK still produced: $apk"
+              exit 1
+            fi
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk" || \
+              "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          done
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: nekobeat-android-apk
           path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/apk/**/*-release*.apk
             src-tauri/gen/android/app/build/outputs/apk/**/*.aab
           if-no-files-found: warn
 
