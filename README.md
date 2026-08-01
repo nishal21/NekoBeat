@@ -187,11 +187,12 @@ Thank you to all the developers and contributors behind these projects.
 
 <a href="https://www.star-history.com/?repos=nishal21%2FNekoBeat&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&theme=dark&legend=top-left&sealed_token=cKL_2lxWgLWsAydT8S-ULwIJyO4YYILgxTFlP9DhZHGWlodH-HZjj8LQ0tFYLowanI90g5CWS8lYVOmdWn2FXb_vJmnHLwj_qZU6uMdYTxZFnMedKuRz7g" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left&sealed_token=cKL_2lxWgLWsAydT8S-ULwIJyO4YYILgxTFlP9DhZHGWlodH-HZjj8LQ0tFYLowanI90g5CWS8lYVOmdWn2FXb_vJmnHLwj_qZU6uMdYTxZFnMedKuRz7g" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left&sealed_token=cKL_2lxWgLWsAydT8S-ULwIJyO4YYILgxTFlP9DhZHGWlodH-HZjj8LQ0tFYLowanI90g5CWS8lYVOmdWn2FXb_vJmnHLwj_qZU6uMdYTxZFnMedKuRz7g" />
  </picture>
 </a>
+
 
 > ⭐ **Every star fuels my motivation!** If NekoBeat makes your day a bit brighter, hit that star button — it means the world to me.
 

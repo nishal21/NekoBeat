@@ -76,44 +76,6 @@ function durableArtUrl(url?: string | null): string {
 
 const placeholderArt = (_seed?: string) => logoImg;
 
-// Hook for mouse-drag horizontal scrolling on non-touch devices
-function useDragScroll() {
-  const ref = useRef<HTMLDivElement>(null);
-  const state = useRef({ isDown: false, startX: 0, scrollLeft: 0 });
-
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    const el = ref.current;
-    if (!el) return;
-    state.current = { isDown: true, startX: e.pageX - el.offsetLeft, scrollLeft: el.scrollLeft };
-    el.style.cursor = 'grabbing';
-    el.style.userSelect = 'none';
-  }, []);
-
-  const onMouseUp = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    state.current.isDown = false;
-    el.style.cursor = 'grab';
-    el.style.userSelect = '';
-  }, []);
-
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!state.current.isDown || !ref.current) return;
-    e.preventDefault();
-    const x = e.pageX - ref.current.offsetLeft;
-    ref.current.scrollLeft = state.current.scrollLeft - (x - state.current.startX);
-  }, []);
-
-  const onMouseLeave = useCallback(() => {
-    if (!ref.current) return;
-    state.current.isDown = false;
-    ref.current.style.cursor = 'grab';
-    ref.current.style.userSelect = '';
-  }, []);
-
-  return { ref, onMouseDown, onMouseUp, onMouseMove, onMouseLeave };
-}
-
 // Provide a stable time formatter outside of renders
 const formatTime = (ms: number) => {
   const totalSeconds = Math.floor(ms / 1000);
