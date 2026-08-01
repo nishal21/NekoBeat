@@ -21,6 +21,8 @@ val gstRoot: String = System.getenv("GSTREAMER_ROOT_ANDROID")
 android {
     compileSdk = 36
     namespace = "com.nishal21.nekobeat"
+    // Keep in sync with CI sdkmanager ndk;… (avoid CXX1104 vs ndk.dir)
+    ndkVersion = "27.0.12077973"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.nishal21.nekobeat"

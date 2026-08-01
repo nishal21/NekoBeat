@@ -160,20 +160,47 @@ jobs:
           brew install gstreamer pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix gstreamer)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
 
-      - name: Windows GStreamer (build-deps EXE + pkg-config)
+      - name: Windows GStreamer (MSI + pkg-config)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
-          # Cached on the NekoBeat build-deps release (reliable vs flaky upstream mirrors)
-          $installerUrl = "https://github.com/nishal21/NekoBeat/releases/download/build-deps/gstreamer-1.0-msvc-x86_64-1.28.1.exe"
-          Write-Host "Downloading GStreamer from GitHub CDN..."
-          Invoke-WebRequest -Uri $installerUrl -OutFile "gstreamer.exe" -UseBasicParsing
-          Write-Host "Installing GStreamer..."
-          Start-Process -FilePath ".\gstreamer.exe" -ArgumentList "/quiet /norestart" -Wait
+          # The build-deps .exe hangs forever on /quiet in Actions. Use official MSIs + msiexec /qn.
+          $ver = '1.26.5'
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
+          $runtime = "gstreamer-1.0-msvc-x86_64-$ver.msi"
+          $devel = "gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
+          Write-Host "Downloading $runtime ..."
+          curl.exe -fsSL --retry 3 -o runtime.msi "$base/$runtime"
+          Write-Host "Downloading $devel ..."
+          curl.exe -fsSL --retry 3 -o devel.msi "$base/$devel"
 
-          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          function Install-Msi([string]$Msi, [string]$Log) {
+            Write-Host "Installing $Msi (quiet, max 10 min)..."
+            $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @(
+              '/i', (Resolve-Path $Msi).Path,
+              '/qn', '/norestart',
+              "INSTALLDIR=C:\gstreamer",
+              "/L*v", $Log
+            ) -PassThru -NoNewWindow
+            if (-not $p.WaitForExit(600000)) {
+              try { Stop-Process -Id $p.Id -Force } catch {}
+              throw "msiexec timed out after 10m for $Msi — see $Log"
+            }
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              Get-Content $Log -Tail 40 -ErrorAction SilentlyContinue
+              throw "msiexec failed for $Msi exit=$($p.ExitCode)"
+            }
+            Write-Host "Installed $Msi (exit $($p.ExitCode))"
+          }
+
+          Install-Msi 'runtime.msi' 'gst-runtime.log'
+          Install-Msi 'devel.msi' 'gst-devel.log'
+
+          $root = 'C:\gstreamer\1.0\msvc_x86_64'
           if (-not (Test-Path "$root\lib\pkgconfig")) {
+            Get-ChildItem 'C:\gstreamer' -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 40 FullName
             throw "GStreamer missing pkgconfig at $root"
           }
           "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -181,7 +208,7 @@ jobs:
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "$root\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           choco install pkgconfiglite -y --no-progress
-
+          Write-Host "GStreamer Windows setup OK"
       - name: Fetch yt-dlp + chmod sidecars (Linux / macOS)
         if: matrix.platform != 'windows-latest'
         run: |
@@ -277,10 +304,11 @@ jobs:
 
       - name: Install NDK + platform
         run: |
-          sdkmanager --install "ndk;28.2.13676358" "platforms;android-34" "build-tools;34.0.0"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
-          echo "$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          # Must match android.ndkVersion that Tauri/AGP resolve (CXX1104 if ndk.dir disagrees)
+          sdkmanager --install "ndk;27.0.12077973" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust + Android targets
         uses: dtolnay/rust-toolchain@stable
@@ -305,14 +333,13 @@ jobs:
           test -f "$GITHUB_WORKSPACE/vendor/arm64/lib/libgstreamer-1.0.a"
           test -f "$GITHUB_WORKSPACE/vendor/arm64/include/gstreamer-1.0/gst/gst.h"
           echo "GSTREAMER_ROOT_ANDROID=$GITHUB_WORKSPACE/vendor" >> "$GITHUB_ENV"
-          # Pin NDK for Gradle so ndk-build matches what we installed (avoid auto NDK 27)
+          # sdk.dir only — do NOT set ndk.dir (conflicts with android.ndkVersion → CXX1104)
           mkdir -p src-tauri/gen/android
-          {
-            echo "sdk.dir=$ANDROID_HOME"
-            echo "ndk.dir=$ANDROID_HOME/ndk/28.2.13676358"
-          } > src-tauri/gen/android/local.properties
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
+          # Clear machine-local Windows gst path from committed gradle.properties
+          sed -i '/^gstAndroidRoot=/d' src-tauri/gen/android/gradle.properties || true
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Apply CI Android cargo/pkg-config env
         run: bash scripts/ci-android-env.sh
