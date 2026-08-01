@@ -55,7 +55,13 @@ if [[ -z "$SO" ]]; then
   exit 1
 fi
 
-cp -f "$SO" "$GST_DIR/libs/arm64-v8a/libgstreamer_android.so"
+DEST="$GST_DIR/libs/arm64-v8a/libgstreamer_android.so"
+mkdir -p "$GST_DIR/libs/arm64-v8a"
+# ndk-build may already have installed into libs/ — don't cp onto itself
+if [[ "$(realpath "$SO")" != "$(realpath "$DEST")" ]]; then
+  cp -f "$SO" "$DEST"
+fi
+SO="$DEST"
 # Optional C++ runtime often required alongside umbrella
 CXX_CANDIDATES=( "$NDK"/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so )
 if [[ -f "${CXX_CANDIDATES[0]:-}" ]]; then
