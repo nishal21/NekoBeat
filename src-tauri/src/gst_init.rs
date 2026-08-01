@@ -95,7 +95,7 @@ fn init_windows() {
 ))]
 fn init_unix() {
     use std::env;
-    let mut common: Vec<&str> = vec![
+    let common: Vec<&str> = vec![
         "/usr/lib/gstreamer-1.0",
         "/usr/lib64/gstreamer-1.0",
         "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",

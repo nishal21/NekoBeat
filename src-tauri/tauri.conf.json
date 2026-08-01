@@ -47,7 +47,7 @@
       "endpoints": [
         "https://gist.githubusercontent.com/nishal21/9e13884354b4b3c11dac82a7356b81dd/raw/ab394352fba9acf565932f092f10dd79b538d568/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNEM0RDMjE2RkI1QkM5QzUKUldURnlWdjdGc0k5UFh4cXNSSlZvdGM5dTcyaEdsY0hQZlZPMGFHZEF6U2YzdGhTbTkvQzUxbzkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBQTBCQzNCQzZBRTU3RQpSV1IrNVdxOHd3dXFDYnFiZkVaMWJ3RFB0dU52dHZ3MnJZcXZZSVZ0YWtQeXpiWXgvdm8vYUpPRAo=",
       "windows": {
         "installMode": "passive"
       }

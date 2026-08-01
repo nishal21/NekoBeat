@@ -3,15 +3,14 @@
 #
 # Triggers: tag v* or Actions → Release → Run workflow
 #
-# Desktop: Windows (.msi/.exe), Linux (.deb/.AppImage), macOS arm64 + Intel
-# Android: aarch64 APK (GStreamer Android SDK + existing gen/android)
+# Desktop: Windows / Linux / macOS arm64 + Intel / Android
 #
-# Required for updater signatures (createUpdaterArtifacts: true):
-#   TAURI_SIGNING_PRIVATE_KEY = full private key text (same as .tauri/nekobeat.key)
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD = only if the key was generated WITH a password.
-#     Do NOT create this secret for unencrypted keys (empty secret → "failed to fill whole buffer").
+# Updater signing (createUpdaterArtifacts: true in tauri.conf.json):
+#   TAURI_SIGNING_PRIVATE_KEY          = contents of .tauri/nekobeat.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD = password used with `tauri signer generate -p`
+#   (Password is REQUIRED in CI — passwordless keys fail non-interactively.)
 #
-# Optional Android signing (otherwise debug/unsigned release APK):
+# Optional Android signing:
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
 
 name: Release
@@ -96,20 +95,21 @@ jobs:
           PW: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::Set repo secret TAURI_SIGNING_PRIVATE_KEY to the contents of .tauri/nekobeat.key"
-            echo "It must match pubkey in src-tauri/tauri.conf.json (createUpdaterArtifacts is enabled)."
+            echo "::error::Missing secret TAURI_SIGNING_PRIVATE_KEY (paste entire .tauri/nekobeat.key)."
             exit 1
           fi
-          # Path form avoids multiline/newline corruption in some runners
-          KEY_FILE="${RUNNER_TEMP}/tauri_updater.key"
-          printf '%s\n' "$KEY" > "$KEY_FILE"
-          echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
-          # Only export password when non-empty. Empty/wrong PW → "failed to fill whole buffer"
-          if [ -n "${PW}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
-          else
-            echo "No TAURI_SIGNING_PRIVATE_KEY_PASSWORD set (OK for unencrypted keys)."
+          if [ -z "$PW" ]; then
+            echo "::error::Missing secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD."
+            echo "CI requires a passworded key. See .tauri/PUT_THESE_IN_GITHUB_SECRETS.txt on your machine."
+            exit 1
           fi
+          KEY_FILE="${RUNNER_TEMP}/tauri_updater.key"
+          # Preserve exact key bytes; avoid extra trailing issues
+          printf '%s' "$KEY" > "$KEY_FILE"
+          # Ensure file ends with a newline (minisign-friendly)
+          echo >> "$KEY_FILE"
+          echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
 
       - name: Linux system deps (WebKit + GStreamer)
         if: matrix.platform == 'ubuntu-22.04'
