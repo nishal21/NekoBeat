@@ -368,6 +368,9 @@ jobs:
       - name: Build Android APK (aarch64)
         env:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
+          # Must be empty for GStreamer ndk-build pkg-config (see Android.mk)
+          PKG_CONFIG_SYSROOT_DIR: ''
+          PKG_CONFIG_PATH: ''
         run: npm run tauri:android:build
 
       - name: Upload APK artifact

@@ -19,7 +19,8 @@ GIO_INC="$LIB/gio-unix-2.0/include"
   echo "GSTREAMER_ROOT_ANDROID=$ROOT"
   echo "PKG_CONFIG_ALLOW_CROSS=1"
   echo "PKG_CONFIG_PATH=$LIB/pkgconfig"
-  echo "PKG_CONFIG_SYSROOT_DIR=$ARCH_ROOT"
+  # Do NOT set PKG_CONFIG_SYSROOT_DIR — it breaks GStreamer ndk-build pkg-config
+  # (double-prefixed -I → gst/gst.h not found). Rust uses SYSTEM_DEPS_* instead.
   echo "OPENSSL_DIR=$ARCH_ROOT"
   echo "OPENSSL_LIB_DIR=$LIB"
   echo "OPENSSL_INCLUDE_DIR=$INC"
