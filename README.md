@@ -185,12 +185,12 @@ Thank you to all the developers and contributors behind these projects.
 
 ## Star History
 
-<a href="https://star-history.com/#nishal21/NekoBeat&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date" />
-  </picture>
+<a href="https://www.star-history.com/?repos=nishal21%2FNekoBeat&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left" />
+ </picture>
 </a>
 
 > ⭐ **Every star fuels my motivation!** If NekoBeat makes your day a bit brighter, hit that star button — it means the world to me.
