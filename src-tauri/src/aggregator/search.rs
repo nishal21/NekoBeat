@@ -168,8 +168,18 @@ async fn search_youtube(query: &str, page: u32) -> Result<Vec<ExternalTrack>, St
                     .and_then(|t| t.as_array())
                     .and_then(|arr| arr.last())
                     .and_then(|t| t["url"].as_str())
-                    .unwrap_or_default()
-                    .to_string();
+                    .map(|u| {
+                        if u.starts_with("//") {
+                            format!("https:{}", u)
+                        } else if u.starts_with("http") {
+                            u.to_string()
+                        } else {
+                            format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", video_id)
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", video_id)
+                    });
 
                 tracks.push(ExternalTrack {
                     id: format!("yt-{}", video_id),

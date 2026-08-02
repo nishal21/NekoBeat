@@ -103,8 +103,26 @@ async fn api_get_json_fresh(
 }
 
 pub async fn search(query: &str, page: u32) -> Result<Vec<ExternalTrack>, String> {
+    // Don't block Browse "All" for minutes — soft-skip on timeout / scrape failure.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        search_inner(query, page),
+    )
+    .await
+    {
+        Ok(Ok(tracks)) => Ok(tracks),
+        Ok(Err(e)) => Err(format!("soft-skip: {}", e)),
+        Err(_) => Err("soft-skip: SoundCloud search timed out".into()),
+    }
+}
+
+async fn search_inner(query: &str, page: u32) -> Result<Vec<ExternalTrack>, String> {
     let offset = page * 25;
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| e.to_string())?;
     let res = api_get_json_fresh(&client, |client_id| {
         format!(
             "https://api-v2.soundcloud.com/search/tracks?q={}&client_id={}&limit=25&offset={}",

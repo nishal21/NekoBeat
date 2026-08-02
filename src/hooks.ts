@@ -390,6 +390,17 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
             if (epoch !== playEpochRef.current) return null;
             setCurrentTrackPath(resolvedUrl || url);
             setIsPlaying(true);
+            // Local/cached files are ready; HTTP streams may re-set buffering via GST events.
+            const playUrl = resolvedUrl || url;
+            if (
+                !playUrl ||
+                playUrl.startsWith('file:') ||
+                playUrl.startsWith('/') ||
+                /^[a-zA-Z]:[\\/]/.test(playUrl) ||
+                (!playUrl.includes('http') && !playUrl.includes('://'))
+            ) {
+                setIsBuffering(false);
+            }
             return resolvedUrl;
         } catch (e) {
             if (epoch !== playEpochRef.current) return null;
@@ -696,6 +707,10 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
                 const pos = clock.position_ms || 0;
                 const dur = clock.duration_ms || 0;
                 applyGstClockSample(pos, dur);
+                // GST sometimes never sends Buffering=100% for HTTP; clear spinner once audio advances.
+                if (pos > 400) {
+                    setIsBuffering((prev) => (prev ? false : prev));
+                }
                 if (dur > 0) {
                     setDurationMs((prev) => (prev === dur ? prev : dur));
                 }
@@ -744,6 +759,32 @@ export type AggregatedTrack = {
     stream_url?: string;
 };
 
+function interleaveSearchResults(yt: AggregatedTrack[], sc: AggregatedTrack[], sp: AggregatedTrack[]): AggregatedTrack[] {
+    const merged: AggregatedTrack[] = [];
+    let yi = 0, si = 0, pi = 0;
+    while (yi < yt.length || si < sc.length || pi < sp.length) {
+        if (yi < yt.length) merged.push(yt[yi++]);
+        if (yi < yt.length) merged.push(yt[yi++]);
+        if (si < sc.length) merged.push(sc[si++]);
+        if (pi < sp.length) merged.push(sp[pi++]);
+    }
+    return merged;
+}
+
+function noteSourceError(errs: Record<string, string>, source: string, reasonRaw: unknown) {
+    const reason = String(reasonRaw).replace(/^Error:\s*/i, '');
+    if (/soft-skip/i.test(reason)) return;
+    if (source === 'spotify' && /429|rate limit/i.test(reason)) {
+        errs.spotify = 'Spotify is rate-limited right now. Use YouTube results, or try Spotify again in a minute.';
+        return;
+    }
+    if (source === 'soundcloud' && /timed out|error sending request|client_id/i.test(reason)) {
+        // Soft failure — Browse still has YT; don't scare the user
+        return;
+    }
+    errs[source] = reason.slice(0, 180);
+}
+
 export function useAggregatorSearch() {
     const [results, setResults] = useState<AggregatedTrack[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -754,6 +795,7 @@ export function useAggregatorSearch() {
     const pageRef = useRef(0);
     const lastQueryRef = useRef('');
     const lastSourceRef = useRef('youtube');
+    const searchGenRef = useRef(0);
 
     const fetchPage = async (query: string, source: string, page: number): Promise<AggregatedTrack[]> => {
         if (source === 'all') {
@@ -767,29 +809,12 @@ export function useAggregatorSearch() {
             const yt = ytResults.status === 'fulfilled' ? ytResults.value : [];
             const sc = scResults.status === 'fulfilled' ? scResults.value : [];
             const sp = spResults.status === 'fulfilled' ? spResults.value : [];
-            if (ytResults.status === 'rejected') errs.youtube = String(ytResults.reason);
-            if (scResults.status === 'rejected') errs.soundcloud = String(scResults.reason);
-            if (spResults.status === 'rejected') {
-                const reason = String(spResults.reason).replace(/^Error:\s*/i, '');
-                // Rate limits are noisy — keep YT/SC results, show a short tip
-                if (/429|rate limit/i.test(reason)) {
-                    errs.spotify = 'Spotify is rate-limited right now. Use YouTube results, or try Spotify again in a minute.';
-                } else if (!/soft-skip/i.test(reason)) {
-                    errs.spotify = reason.slice(0, 180);
-                }
-            }
+            if (ytResults.status === 'rejected') noteSourceError(errs, 'youtube', ytResults.reason);
+            if (scResults.status === 'rejected') noteSourceError(errs, 'soundcloud', scResults.reason);
+            if (spResults.status === 'rejected') noteSourceError(errs, 'spotify', spResults.reason);
             setSourceErrors(errs);
 
-            // Interleave: prefer non-snipped SC (backend already sorts), 2 YT, 1 SC, 1 SP
-            const merged: AggregatedTrack[] = [];
-            let yi = 0, si = 0, pi = 0;
-            while (yi < yt.length || si < sc.length || pi < sp.length) {
-                if (yi < yt.length) merged.push(yt[yi++]);
-                if (yi < yt.length) merged.push(yt[yi++]);
-                if (si < sc.length) merged.push(sc[si++]);
-                if (pi < sp.length) merged.push(sp[pi++]);
-            }
-            return merged;
+            return interleaveSearchResults(yt, sc, sp);
         } else {
             setSourceErrors({});
             return await invoke<AggregatedTrack[]>('search_external', { query, source, page });
@@ -803,22 +828,84 @@ export function useAggregatorSearch() {
             return;
         }
 
+        const gen = ++searchGenRef.current;
         pageRef.current = 0;
         lastQueryRef.current = query;
         lastSourceRef.current = source;
         setIsLoading(true);
         setError(null);
+        setSourceErrors({});
         setHasMore(true);
+        setResults([]);
 
         try {
-            const newResults = await fetchPage(query, source, 0);
-            setResults(newResults);
-            if (newResults.length === 0) setHasMore(false);
+            // Progressive "All": paint YouTube ASAP, then merge SC/Spotify without blocking the grid.
+            if (source === 'all') {
+                let yt: AggregatedTrack[] = [];
+                let sc: AggregatedTrack[] = [];
+                let sp: AggregatedTrack[] = [];
+                const errs: Record<string, string> = {};
+
+                const ytPromise = invoke<AggregatedTrack[]>('search_external', { query, source: 'youtube', page: 0 })
+                    .then((rows) => {
+                        if (gen !== searchGenRef.current) return;
+                        yt = rows;
+                        setResults(interleaveSearchResults(yt, sc, sp));
+                        setIsLoading(false);
+                    })
+                    .catch((e) => {
+                        if (gen !== searchGenRef.current) return;
+                        noteSourceError(errs, 'youtube', e);
+                        setSourceErrors({ ...errs });
+                    });
+
+                const scPromise = invoke<AggregatedTrack[]>('search_external', { query, source: 'soundcloud', page: 0 })
+                    .then((rows) => {
+                        if (gen !== searchGenRef.current) return;
+                        sc = rows;
+                        setResults(interleaveSearchResults(yt, sc, sp));
+                    })
+                    .catch((e) => {
+                        if (gen !== searchGenRef.current) return;
+                        noteSourceError(errs, 'soundcloud', e);
+                        setSourceErrors({ ...errs });
+                    });
+
+                const spPromise = invoke<AggregatedTrack[]>('search_external', { query, source: 'spotify', page: 0 })
+                    .then((rows) => {
+                        if (gen !== searchGenRef.current) return;
+                        sp = rows;
+                        setResults(interleaveSearchResults(yt, sc, sp));
+                    })
+                    .catch((e) => {
+                        if (gen !== searchGenRef.current) return;
+                        noteSourceError(errs, 'spotify', e);
+                        setSourceErrors({ ...errs });
+                    });
+
+                await Promise.allSettled([ytPromise, scPromise, spPromise]);
+                if (gen !== searchGenRef.current) return;
+                const merged = interleaveSearchResults(yt, sc, sp);
+                setResults(merged);
+                setSourceErrors({ ...errs });
+                if (merged.length === 0) {
+                    setHasMore(false);
+                    if (Object.keys(errs).length > 0) {
+                        setError('Failed to fetch results from external sources.');
+                    }
+                }
+            } else {
+                const newResults = await fetchPage(query, source, 0);
+                if (gen !== searchGenRef.current) return;
+                setResults(newResults);
+                if (newResults.length === 0) setHasMore(false);
+            }
         } catch (e) {
-            setError("Failed to fetch results from external sources.");
+            if (gen !== searchGenRef.current) return;
+            setError('Failed to fetch results from external sources.');
             console.error(e);
         } finally {
-            setIsLoading(false);
+            if (gen === searchGenRef.current) setIsLoading(false);
         }
     };
 

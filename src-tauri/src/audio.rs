@@ -270,7 +270,8 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         }
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
                             let _ = app_handle.emit("audio-playing", url);
-                            // Keep buffering true until bus Buffering reports usable percent
+                            // Many HTTP sources never emit Buffering messages — don't leave UI stuck.
+                            let _ = app_handle.emit("audio-buffering", false);
                         } else {
                             let _ = app_handle.emit("audio-buffering", false);
                         }
