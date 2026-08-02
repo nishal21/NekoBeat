@@ -56,10 +56,9 @@ jobs:
         id: meta
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          # Boolean footgun: `x && draft || true` always becomes true when draft=false
+          # Boolean footgun: `x && draft || true` is always true when draft=false
           WANT_DRAFT: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
         run: |
           set -euo pipefail
@@ -76,41 +75,44 @@ jobs:
             DRAFT=false
           fi
 
-          BODY="$(cat <<'EOF'
-## NekoBeat
+          # Keep every line indented under run:| so YAML does not treat markdown
+          # tables ("| ... |") as a new block scalar. Strip the indent for notes.
+          NOTES_FILE="${RUNNER_TEMP}/nekobeat-release-notes.md"
+          cat > "$NOTES_FILE" <<'EOF'
+          ## NekoBeat
 
-### Desktop
-Full app: Browse, Listen, Library, streaming (YouTube / SoundCloud / Spotify), EQ, lyrics, updater.
+          ### Desktop
+          Full app: Browse, Listen, Library, streaming (YouTube / SoundCloud / Spotify), EQ, lyrics, updater.
 
-| Platform | Artifacts |
-|----------|-----------|
-| Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
-| Linux | `.deb` / `.AppImage` |
-| macOS | `.dmg` (Apple Silicon + Intel) |
+          | Platform | Artifacts |
+          |----------|-----------|
+          | Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
+          | Linux | `.deb` / `.AppImage` |
+          | macOS | `.dmg` (Apple Silicon + Intel) |
 
-### Android (library preview)
-APK: `NekoBeat-*-android-*.apk`
+          ### Android (library preview)
+          APK: `NekoBeat-*-android-*.apk`
 
-This build is for **music already on your phone** — Library scan/play, offline Liked files, Settings, EQ.
-Search and online streaming are **off** until they work as well as desktop.
+          This build is for **music already on your phone** — Library scan/play, offline Liked files, Settings, EQ.
+          Search and online streaming are **off** until they work as well as desktop.
 
-Uninstall any older APK before installing.
-EOF
-)"
+          Uninstall any older APK before installing.
+          EOF
+          sed -i 's/^          //' "$NOTES_FILE"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Reusing existing release tag=$TAG"
             if [ "$DRAFT" = "true" ]; then
-              gh release edit "$TAG" --title "$RELEASE_NAME" --notes "$BODY" --draft
+              gh release edit "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --draft
             else
-              gh release edit "$TAG" --title "$RELEASE_NAME" --notes "$BODY" --draft=false
+              gh release edit "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --draft=false
             fi
           else
             echo "Creating release tag=$TAG draft=$DRAFT"
             if [ "$DRAFT" = "true" ]; then
-              gh release create "$TAG" --title "$RELEASE_NAME" --notes "$BODY" --draft
+              gh release create "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --draft
             else
-              gh release create "$TAG" --title "$RELEASE_NAME" --notes "$BODY"
+              gh release create "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE"
             fi
           fi
 
