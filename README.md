@@ -144,7 +144,7 @@ Or grab a build from [Releases](https://github.com/nishal21/NekoBeat/releases/la
 - [Node.js](https://nodejs.org/) (LTS)
 - [Rust](https://www.rust-lang.org/tools/install)
 - [GStreamer](https://gstreamer.freedesktop.org/download/) development libraries
-- `[yt-dlp](https://github.com/yt-dlp/yt-dlp)` on your PATH
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your PATH
 
 ```bash
 git clone https://github.com/nishal21/NekoBeat.git
