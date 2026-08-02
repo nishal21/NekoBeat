@@ -768,10 +768,10 @@ export function useAggregatorSearch() {
             if (ytResults.status === 'rejected') errs.youtube = String(ytResults.reason);
             if (scResults.status === 'rejected') errs.soundcloud = String(scResults.reason);
             if (spResults.status === 'rejected') {
+                // Always surface Spotify failures (web search / token). Soft-skip only explicit marker.
                 const reason = String(spResults.reason);
-                // Soft-skip missing Spotify helper (esp. Android) — don't scare the user
-                if (!/not found|unavailable|mobile|soft-skip/i.test(reason)) {
-                    errs.spotify = reason;
+                if (!/soft-skip/i.test(reason)) {
+                    errs.spotify = reason.replace(/^Error:\s*/i, '').slice(0, 180);
                 }
             }
             setSourceErrors(errs);
@@ -1008,6 +1008,12 @@ export type TrackData = {
     local_lyrics?: string;
 };
 
+function mergeLibraryTracks(prev: TrackData[], scanned: TrackData[]): TrackData[] {
+    const map = new Map(prev.map(t => [t.filepath, t]));
+    scanned.forEach(t => map.set(t.filepath, t));
+    return Array.from(map.values());
+}
+
 export function useLibrary() {
     const [tracks, setTracks] = useState<TrackData[]>([]);
     const [isScanning, setIsScanning] = useState(false);
@@ -1025,14 +1031,41 @@ export function useLibrary() {
         setIsScanning(true);
         try {
             const scanned = await invoke<TrackData[]>('scan_directory', { path: directory });
-            setTracks(prev => {
-                // Simple merge, avoiding duplicates based on filepath
-                const map = new Map(prev.map(t => [t.filepath, t]));
-                scanned.forEach(t => map.set(t.filepath, t));
-                return Array.from(map.values());
-            });
+            setTracks(prev => mergeLibraryTracks(prev, scanned));
         } catch (e) {
             console.error("Failed to scan directory:", e);
+            throw e;
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    /** Mobile: pick individual audio files (folder picker is broken on Android). */
+    const importAudioFiles = async (paths: string[]) => {
+        if (!paths.length) return;
+        setIsScanning(true);
+        try {
+            const scanned = await invoke<TrackData[]>('import_audio_files', { paths });
+            setTracks(prev => mergeLibraryTracks(prev, scanned));
+            return scanned;
+        } catch (e) {
+            console.error("Failed to import audio files:", e);
+            throw e;
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    /** Mobile: walk Music / Download with READ_MEDIA_AUDIO. */
+    const scanDeviceMusic = async () => {
+        setIsScanning(true);
+        try {
+            const scanned = await invoke<TrackData[]>('scan_device_music');
+            setTracks(prev => mergeLibraryTracks(prev, scanned));
+            return scanned;
+        } catch (e) {
+            console.error("Failed to scan device music:", e);
+            throw e;
         } finally {
             setIsScanning(false);
         }
@@ -1056,6 +1089,8 @@ export function useLibrary() {
         tracks,
         isScanning,
         scanDirectory,
+        importAudioFiles,
+        scanDeviceMusic,
         clearLibrary,
         loadCachedTracks
     };

@@ -139,6 +139,21 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
     let ytdlp = crate::process_util::find_ytdlp();
     let mut last_err = String::new();
 
+    // Android: prefer in-process download first (exec of libytdlp.so is flaky).
+    #[cfg(target_os = "android")]
+    {
+        match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
+            Ok(uri) => return Ok(uri),
+            Err(e) => {
+                last_err = e;
+                println!(
+                    "YouTube: rusty_ytdl failed on Android ({}) — trying yt-dlp",
+                    last_err
+                );
+            }
+        }
+    }
+
     if let Ok(ytdlp_path) = ytdlp {
         let out_tmpl = cache_dir
             .join(format!("{}.%(ext)s", video_id))
@@ -218,15 +233,25 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
         );
     }
 
-    // In-process fallback (critical on Android where yt-dlp is not bundled)
-    match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
-        Ok(uri) => return Ok(uri),
-        Err(e) => {
-            if last_err.is_empty() {
-                last_err = e;
-            } else {
-                last_err = format!("{}; rusty_ytdl: {}", last_err, e);
+    // In-process fallback (desktop / when yt-dlp missing or failed)
+    #[cfg(not(target_os = "android"))]
+    {
+        match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
+            Ok(uri) => return Ok(uri),
+            Err(e) => {
+                if last_err.is_empty() {
+                    last_err = e;
+                } else {
+                    last_err = format!("{}; rusty_ytdl: {}", last_err, e);
+                }
             }
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        if last_err.is_empty() {
+            last_err = "yt-dlp and rusty_ytdl both failed".into();
         }
     }
 

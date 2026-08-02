@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
-import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, FolderSearch, Music, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, EQ_PRESETS, useAudioClock, getAudioClock, seedAudioClockDuration, isResumeGuarded, isRealArtworkUrl, toDisplayArtUrl, usePlayQueue, QueueTrack } from "./hooks";
 // Used for interacting with system dialogs in Tauri
@@ -872,7 +872,8 @@ function App() {
     return saved ? JSON.parse(saved) : false;
   });
 
-  const { tracks, isScanning, scanDirectory, clearLibrary } = useLibrary();
+  const { tracks, isScanning, scanDirectory, importAudioFiles, scanDeviceMusic, clearLibrary } = useLibrary();
+  const [isMobileOs, setIsMobileOs] = useState(false);
   const { results: searchResults, isLoading: isSearching, isLoadingMore, hasMore, search: performSearch, loadMore, sourceErrors, error: searchError } = useAggregatorSearch();
   const { likedTracks, isLiking, toggleLike } = useLikedLibrary();
   const playQueue = usePlayQueue();
@@ -1468,7 +1469,7 @@ function App() {
         message: track.source === 'soundcloud' 
           ? `"${trackTitle}" could not be played from SoundCloud (or YouTube fallback).`
           : track.source === 'spotify'
-            ? `Failed to play "${trackTitle}". Spotify HiFi needs desktop; try YouTube results.`
+            ? `Failed to play "${trackTitle}". Trying YouTube match failed — check network, or play a YouTube result instead.`
             : `Failed to stream "${trackTitle}". Check network and try again.`,
         trackTitle,
         trackArtist,
@@ -1889,13 +1890,71 @@ function App() {
     setIsExpanded(false);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const plat = await invoke<string>('runtime_platform');
+        if (!cancelled) setIsMobileOs(plat === 'android' || plat === 'ios');
+      } catch {
+        const ua = navigator.userAgent || '';
+        if (!cancelled) setIsMobileOs(/Android|iPhone|iPad/i.test(ua));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /** Desktop: folder picker. Mobile: directory picker is broken — use scan / multi-file. */
   const handleScanClick = async () => {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-    });
-    if (selected) {
-      await scanDirectory(selected as string);
+    if (isMobileOs) {
+      try {
+        const scanned = await scanDeviceMusic();
+        if (!scanned?.length) {
+          window.alert('No songs found in Music/Download. Try Add songs and pick files.');
+        }
+      } catch (e) {
+        window.alert(String(e).replace(/^Error:\s*/i, '') || 'Could not scan device music. Allow audio permission, then try Add songs.');
+      }
+      return;
+    }
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+      if (selected) {
+        await scanDirectory(selected as string);
+      }
+    } catch (e) {
+      window.alert(String(e).replace(/^Error:\s*/i, '') || 'Could not open folder.');
+    }
+  };
+
+  const handleAddSongsClick = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        filters: [{
+          name: 'Audio',
+          extensions: ['mp3', 'flac', 'm4a', 'wav', 'ogg', 'opus', 'aac', 'wma'],
+        }],
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const usable = paths.filter((p) => typeof p === 'string' && !String(p).startsWith('content:'));
+      if (usable.length === 0 && paths.length > 0) {
+        window.alert(
+          'Android shared files (content://) need a rebuild with SAF import. Use Scan device music after allowing audio access, or copy songs into Music/Download first.',
+        );
+        // Still try — some builds resolve content URIs to readable cache paths
+      }
+      const imported = await importAudioFiles(paths as string[]);
+      if (!imported?.length) {
+        window.alert('No playable audio files were imported. Prefer Scan device music on Android.');
+      }
+    } catch (e) {
+      window.alert(String(e).replace(/^Error:\s*/i, '') || 'Could not add songs.');
     }
   };
 
@@ -2163,16 +2222,37 @@ function App() {
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-6 md:mb-8">
                 <h1 className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tighter leading-none">Your Library</h1>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <ViewToggle viewMode={viewMode} onChange={setViewMode} />
-                  <button
-                    onClick={handleScanClick}
-                    disabled={isScanning}
-                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl transition-all font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)] hover:shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_15px_40px_rgba(219,255,0,0.6)] hover:-translate-y-1"
-                  >
-                    <FolderOpen size={16} />
-                    <span>{isScanning ? "Scanning folder…" : "Add folder"}</span>
-                  </button>
+                  {isMobileOs ? (
+                    <>
+                      <button
+                        onClick={handleScanClick}
+                        disabled={isScanning}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl transition-all font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)]"
+                      >
+                        <FolderSearch size={16} />
+                        <span>{isScanning ? "Scanning…" : "Scan device music"}</span>
+                      </button>
+                      <button
+                        onClick={handleAddSongsClick}
+                        disabled={isScanning}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-white/10 text-white border border-white/15 rounded-xl font-bold text-sm disabled:opacity-50"
+                      >
+                        <Music size={16} />
+                        <span>Add songs</span>
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={handleScanClick}
+                      disabled={isScanning}
+                      className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl transition-all font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)] hover:shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_15px_40px_rgba(219,255,0,0.6)] hover:-translate-y-1"
+                    >
+                      <FolderOpen size={16} />
+                      <span>{isScanning ? "Scanning folder…" : "Add folder"}</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2180,15 +2260,35 @@ function App() {
                 <div className="py-20 px-6 text-center max-w-md mx-auto space-y-4">
                   <Library size={48} className="mx-auto mb-2 text-[var(--color-neon-yellow)]/70" />
                   <h2 className="text-xl font-display font-black text-white tracking-tight">Your library is empty</h2>
-                  <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">Add a folder of MP3, FLAC, or WAV files to play offline from this device.</p>
-                  <button
-                    onClick={handleScanClick}
-                    disabled={isScanning}
-                    className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-[var(--color-neon-yellow)] text-black rounded-xl font-bold text-sm disabled:opacity-50"
-                  >
-                    <FolderOpen size={16} />
-                    {isScanning ? "Scanning folder…" : "Add a music folder"}
-                  </button>
+                  <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">
+                    {isMobileOs
+                      ? "Allow audio permission, then scan Music/Download — or pick songs manually. Folder picker does not work on Android."
+                      : "Add a folder of MP3, FLAC, or WAV files to play offline from this device."}
+                  </p>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <button
+                      onClick={handleScanClick}
+                      disabled={isScanning}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-[var(--color-neon-yellow)] text-black rounded-xl font-bold text-sm disabled:opacity-50"
+                    >
+                      {isMobileOs ? <FolderSearch size={16} /> : <FolderOpen size={16} />}
+                      {isScanning
+                        ? "Scanning…"
+                        : isMobileOs
+                          ? "Scan device music"
+                          : "Add a music folder"}
+                    </button>
+                    {isMobileOs && (
+                      <button
+                        onClick={handleAddSongsClick}
+                        disabled={isScanning}
+                        className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-white/10 text-white border border-white/15 rounded-xl font-bold text-sm disabled:opacity-50"
+                      >
+                        <Music size={16} />
+                        Add songs
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : viewMode === 'grid' ? (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 md:gap-6">

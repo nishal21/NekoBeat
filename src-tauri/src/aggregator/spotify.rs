@@ -45,12 +45,12 @@ async fn resolve_spotify_url_inner(
     // Likes copy the file you're hearing; downloads use title+artist so matches stay correct.
     if let Some(ref id) = track_id {
         if let Ok(Some(path)) = crate::offline::check_liked_cache(app.clone(), id.clone()).await {
-            let file_uri = format!("file:///{}", path.replace('\\', "/"));
+            let file_uri = crate::path_util::path_to_file_uri(std::path::Path::new(&path));
             println!("Spotify: Using cached liked/HiFi at {}", path);
             return Ok(file_uri);
         }
         if let Some(cached) = find_hifi_cache(app, id) {
-            let file_uri = format!("file:///{}", cached.to_string_lossy().replace('\\', "/"));
+            let file_uri = crate::path_util::path_to_file_uri(&cached);
             println!("Spotify: Using HiFi cache at {:?}", cached);
             return Ok(file_uri);
         }

@@ -193,86 +193,97 @@ async fn search_youtube(query: &str, page: u32) -> Result<Vec<ExternalTrack>, St
 
 async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Result<Vec<ExternalTrack>, String> {
     println!("Spotify: Searching for: {}", query);
-
     let offset = page * 20;
-    let search_arg = if offset > 0 {
-        format!("SEARCH:{}", offset)
-    } else {
-        "SEARCH".to_string()
-    };
 
-    // 1) Prefer SpotiFLAC CLI when it actually runs
-    match sidecar_util::run_sidecar(app, &[query, &search_arg], SEARCH_TIMEOUT).await {
-        Ok(output) => {
-            let json_str = sidecar_util::last_json_line(&output.stdout);
-            if !json_str.is_empty() {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                    if parsed["success"].as_bool() == Some(true) {
-                        let mut tracks = Vec::new();
-                        if let Some(results) = parsed["tracks"].as_array() {
-                            for item in results {
-                                let id = item["id"].as_str().unwrap_or("").to_string();
-                                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                                let artists = item["artists"].as_str().unwrap_or("Unknown Artist").to_string();
-                                let album = item["album_name"].as_str().unwrap_or("").to_string();
-                                let cover = item["images"].as_str().unwrap_or("").to_string();
-                                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
-                                let external_url = item["external_urls"].as_str().unwrap_or("").to_string();
-                                if id.is_empty() {
-                                    continue;
+    // In-process web search first on mobile (no Go exec). Desktop tries CLI then web.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app;
+        return spotify_web_to_tracks(query, offset).await;
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let search_arg = if offset > 0 {
+            format!("SEARCH:{}", offset)
+        } else {
+            "SEARCH".to_string()
+        };
+
+        match sidecar_util::run_sidecar(app, &[query, &search_arg], SEARCH_TIMEOUT).await {
+            Ok(output) => {
+                let json_str = sidecar_util::last_json_line(&output.stdout);
+                if !json_str.is_empty() {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        if parsed["success"].as_bool() == Some(true) {
+                            let mut tracks = Vec::new();
+                            if let Some(results) = parsed["tracks"].as_array() {
+                                for item in results {
+                                    let id = item["id"].as_str().unwrap_or("").to_string();
+                                    let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                                    let artists =
+                                        item["artists"].as_str().unwrap_or("Unknown Artist").to_string();
+                                    let album = item["album_name"].as_str().unwrap_or("").to_string();
+                                    let cover = item["images"].as_str().unwrap_or("").to_string();
+                                    let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
+                                    let external_url =
+                                        item["external_urls"].as_str().unwrap_or("").to_string();
+                                    if id.is_empty() {
+                                        continue;
+                                    }
+                                    tracks.push(ExternalTrack {
+                                        id: format!("sp-{}", id),
+                                        title: name,
+                                        artist: artists,
+                                        album,
+                                        duration_ms,
+                                        artwork_url: cover,
+                                        source: "spotify".to_string(),
+                                        stream_url: if external_url.is_empty() {
+                                            Some(format!("https://open.spotify.com/track/{}", id))
+                                        } else {
+                                            Some(external_url)
+                                        },
+                                    });
                                 }
-                                tracks.push(ExternalTrack {
-                                    id: format!("sp-{}", id),
-                                    title: name,
-                                    artist: artists,
-                                    album,
-                                    duration_ms,
-                                    artwork_url: cover,
-                                    source: "spotify".to_string(),
-                                    stream_url: if external_url.is_empty() {
-                                        Some(format!("https://open.spotify.com/track/{}", id))
-                                    } else {
-                                        Some(external_url)
-                                    },
-                                });
                             }
-                        }
-                        println!("Spotify: Found {} tracks via CLI for '{}'", tracks.len(), query);
-                        if !tracks.is_empty() {
-                            return Ok(tracks);
+                            if !tracks.is_empty() {
+                                println!(
+                                    "Spotify: Found {} tracks via CLI for '{}'",
+                                    tracks.len(),
+                                    query
+                                );
+                                return Ok(tracks);
+                            }
                         }
                     }
                 }
+                println!("Spotify: CLI empty — trying in-process web search");
             }
-            println!("Spotify: CLI returned no usable tracks — trying in-process web search");
+            Err(e) => println!("Spotify: CLI failed ({}) — web search", e),
         }
-        Err(e) => {
-            println!("Spotify: CLI failed ({}) — trying in-process web search", e);
-        }
-    }
 
-    // 2) In-process Web API search (works on Android without exec'ing Go)
-    match crate::aggregator::spotify_web::search_tracks(query, 20, offset).await {
-        Ok(hits) => {
-            let tracks: Vec<ExternalTrack> = hits
-                .into_iter()
-                .map(|h| ExternalTrack {
-                    id: format!("sp-{}", h.id),
-                    title: h.title,
-                    artist: h.artist,
-                    album: h.album,
-                    duration_ms: h.duration_ms,
-                    artwork_url: h.artwork_url,
-                    source: "spotify".to_string(),
-                    stream_url: Some(h.external_url),
-                })
-                .collect();
-            Ok(tracks)
-        }
-        Err(e) => {
-            eprintln!("Spotify: web search failed: {}", e);
-            // Soft-empty so "All" search still shows YT/SC
-            Ok(vec![])
-        }
+        spotify_web_to_tracks(query, offset).await
     }
+}
+
+async fn spotify_web_to_tracks(query: &str, offset: u32) -> Result<Vec<ExternalTrack>, String> {
+    let hits = crate::aggregator::spotify_web::search_tracks(query, 20, offset).await?;
+    let tracks: Vec<ExternalTrack> = hits
+        .into_iter()
+        .map(|h| ExternalTrack {
+            id: format!("sp-{}", h.id),
+            title: h.title,
+            artist: h.artist,
+            album: h.album,
+            duration_ms: h.duration_ms,
+            artwork_url: h.artwork_url,
+            source: "spotify".to_string(),
+            stream_url: Some(h.external_url),
+        })
+        .collect();
+    if tracks.is_empty() {
+        return Err(format!("No Spotify results for '{}'", query));
+    }
+    Ok(tracks)
 }

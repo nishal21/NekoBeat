@@ -405,6 +405,11 @@ pub async fn stream_external_audio(
                     .and_then(|u| u.to_file_path().ok())
                     .map(|p| p.to_string_lossy().to_string())
                     .or_else(|| {
+                        crate::path_util::resolve_playable_local_path(&actual_url)
+                            .ok()
+                            .map(|p| p.to_string_lossy().to_string())
+                    })
+                    .or_else(|| {
                         #[cfg(windows)]
                         {
                             actual_url
@@ -414,16 +419,16 @@ pub async fn stream_external_audio(
                         }
                         #[cfg(not(windows))]
                         {
-                            actual_url.strip_prefix("file://").map(|rest| {
-                                if rest.starts_with('/') {
-                                    rest.to_string()
-                                } else {
-                                    format!("/{}", rest)
-                                }
-                            })
+                            // file:///data/... → /data/... ; file:////data → collapse
+                            let rest = actual_url
+                                .strip_prefix("file://")
+                                .unwrap_or(&actual_url);
+                            let normalized = rest.trim_start_matches('/');
+                            Some(format!("/{}", normalized))
                         }
                     })
                     .ok_or_else(|| format!("Invalid file URI: {}", actual_url))?;
+                crate::path_util::resolve_playable_local_path(&path)?;
                 state
                     .tx
                     .send(AudioCommand::Play(path))
