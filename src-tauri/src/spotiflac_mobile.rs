@@ -37,7 +37,8 @@ fn jni_string(env: &mut jni::JNIEnv, obj: jni::objects::JObject) -> Result<Strin
     let java = env
         .get_string(&jstr)
         .map_err(|e| format!("get_string: {e}"))?;
-    Ok(java.to_string())
+    // jni 0.21: JavaStr is not Display; use From<JavaStr> for String.
+    Ok(String::from(java))
 }
 
 /// True when gobackend.aar is on the classpath (Android only).
