@@ -127,7 +127,7 @@ Or grab a build from [Releases](https://github.com/nishal21/NekoBeat/releases/la
 
 - **macOS**: download from [Releases](https://github.com/nishal21/NekoBeat/releases/latest)
 - **Linux**: `.deb` / AppImage from Releases
-- **Android**: early library preview APK (local Library / Liked / Settings). Browse and streaming stay on desktop for now. Build notes: `docs/ANDROID_GSTREAMER.md`
+- **Android**: early library preview APK (local Library / Liked / Settings). Browse and streaming stay on desktop for now. 
 
 ### Build from source
 
