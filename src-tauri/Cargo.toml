@@ -47,6 +47,7 @@ discord-rich-presence = "1.1.0"
 tauri-plugin-global-shortcut = "2.3.1"
 scraper = "0.19"
 tauri-plugin-updater = "2.10.0"
+tauri-plugin-single-instance = { version = "2.4.3", features = ["semver"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_System_Console", "Win32_Foundation"] }

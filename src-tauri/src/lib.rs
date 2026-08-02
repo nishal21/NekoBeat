@@ -36,9 +36,19 @@ fn log_frontend(msg: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // `mut` only needed when the desktop updater plugin is chained below.
+    // `mut` only needed when desktop plugins are chained below.
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Must be registered first: second launch focuses the existing app (no duplicate process).
+    #[cfg(not(mobile))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app);
+        }));
+    }
+
+    builder = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
@@ -104,8 +114,22 @@ pub fn run() {
                 }
                 _ => {}
             })
-            .run(tauri::generate_context!())
-            .expect("error while running tauri application");
+            .build(tauri::generate_context!())
+            .expect("error while building tauri application")
+            .run(|app_handle, event| {
+                // macOS dock click while running (OS single-instance) — show again
+                #[cfg(target_os = "macos")]
+                if let tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } = event
+                {
+                    if !has_visible_windows {
+                        focus_main_window(app_handle);
+                    }
+                }
+                let _ = (app_handle, event);
+            });
     }
 
     #[cfg(mobile)]
@@ -113,6 +137,15 @@ pub fn run() {
         builder
             .run(tauri::generate_context!())
             .expect("error while running tauri application");
+    }
+}
+
+#[cfg(not(mobile))]
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
