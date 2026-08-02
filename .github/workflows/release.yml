@@ -411,8 +411,10 @@ jobs:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
           PKG_CONFIG_SYSROOT_DIR: ''
           PKG_CONFIG_PATH: ''
-          # Ship Go AAR; runtime load only in process :spotiflac (crash isolation).
-          NEKOBEAT_ENABLE_GOBACKEND: '1'
+          # Keep AAR build above for artifacts, but do NOT package into APK yet —
+          # packaging + Settings/worker bind caused UI crashes. Re-enable with '1'
+          # after device smoke of :spotiflac isolation is green.
+          NEKOBEAT_ENABLE_GOBACKEND: '0'
         run: npm run tauri:android:build
 
       - name: Verify APK is signed (not *-unsigned)

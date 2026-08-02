@@ -171,30 +171,8 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
     let ytdlp = crate::process_util::find_ytdlp();
     let mut last_err = String::new();
 
-    // Android / when CDN PO-tokens break rusty: Piped/Invidious proxy download first.
-    // Also used as late fallback on desktop after yt-dlp/rusty.
-    #[cfg(target_os = "android")]
-    {
-        match resolve_youtube_via_proxy_apis(&cache_dir, &video_id).await {
-            Ok(uri) => return Ok(uri),
-            Err(e) => {
-                push_err(&mut last_err, format!("proxy: {}", e));
-                println!("YouTube: proxy APIs failed ({}) — trying rusty/yt-dlp", e);
-            }
-        }
-
-        match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
-            Ok(uri) => return Ok(uri),
-            Err(e) => {
-                push_err(&mut last_err, format!("rusty_ytdl: {}", e));
-                println!(
-                    "YouTube: rusty_ytdl failed on Android ({}) — trying yt-dlp if present",
-                    e
-                );
-            }
-        }
-    }
-
+    // Order: yt-dlp (bundled libytdlp.so on Android) → rusty → Piped/Invidious.
+    // Old Android order (proxies first) timed out for minutes and play never started.
     match &ytdlp {
         Ok(ytdlp_path) => {
             let out_tmpl = cache_dir
@@ -207,8 +185,14 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
                 video_id
             );
 
-            // tv_embedded often yields smaller audio-only; android as fallback (progressive mp4).
-            for client in ["tv_embedded", "android"] {
+            // android client first on phone; tv_embedded often smaller audio-only.
+            let clients: &[&str] = if cfg!(target_os = "android") {
+                &["android", "tv_embedded", "ios"]
+            } else {
+                &["tv_embedded", "android"]
+            };
+
+            for client in clients {
                 if let Ok(entries) = std::fs::read_dir(&cache_dir) {
                     for entry in entries.flatten() {
                         let name = entry.file_name().to_string_lossy().to_string();
@@ -235,7 +219,7 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
 
                 let mut cmd = tokio::process::Command::new(ytdlp_path);
                 cmd.args(&args);
-                match crate::process_util::run_silent_timeout(cmd, std::time::Duration::from_secs(180))
+                match crate::process_util::run_silent_timeout(cmd, std::time::Duration::from_secs(120))
                     .await
                 {
                     Ok(output) if output.status.success() => {
@@ -271,20 +255,14 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
             }
         }
         Err(e) => {
-            // Do NOT replace a prior rusty error with "binary not found"
-            println!("YouTube: yt-dlp unavailable ({}) — relying on in-process download", e);
+            println!("YouTube: yt-dlp unavailable ({}) — trying in-process download", e);
             push_err(&mut last_err, format!("yt-dlp unavailable: {}", e));
         }
     }
 
-    // Desktop: yt-dlp first, then rusty, then Piped/Invidious proxies.
-    // Android already tried proxy + rusty above.
-    #[cfg(not(target_os = "android"))]
-    {
-        match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
-            Ok(uri) => return Ok(uri),
-            Err(e) => push_err(&mut last_err, format!("rusty_ytdl: {}", e)),
-        }
+    match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
+        Ok(uri) => return Ok(uri),
+        Err(e) => push_err(&mut last_err, format!("rusty_ytdl: {}", e)),
     }
 
     match resolve_youtube_via_proxy_apis(&cache_dir, &video_id).await {
@@ -293,9 +271,9 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
     }
 
     Err(format!(
-        "YouTube download failed (Piped/Invidious + rusty/yt-dlp): {}",
+        "YouTube download failed (yt-dlp + rusty + Piped/Invidious): {}",
         if last_err.is_empty() {
-            "unknown error — all proxies unreachable".to_string()
+            "unknown error — all download paths failed".to_string()
         } else {
             last_err.chars().take(360).collect::<String>()
         }
@@ -428,10 +406,16 @@ fn file_big_enough(path: &Path) -> bool {
 }
 
 async fn download_url_to_file(url: &str, out_path: &Path) -> Result<(), String> {
+    // Match googlevideo signed client — Chrome desktop UA often gets HTTP 403.
+    let ua = if url.contains("googlevideo.com") || url.contains("c=ANDROID") {
+        "com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"
+    } else if url.contains("c=TV") || url.contains("c=TVHTML5") {
+        "Mozilla/5.0 (ChromiumStylePlatform) cobalt/Version"
+    } else {
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    };
     let client = reqwest::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-        )
+        .user_agent(ua)
         .timeout(std::time::Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()
@@ -473,10 +457,12 @@ const YT_PROXY_APIS: &[&str] = &[
     "https://pipedapi.darkness.services",
     "https://pipedapi.kavin.rocks",
     "https://pipedapi.syncpundit.io",
+    "https://pipedapi.leptons.xyz",
     "https://invidious.nerdvpn.de",
     "https://inv.nadeko.net",
     "https://yewtu.be",
     "https://invidious.fdn.fr",
+    "https://yt.artemislena.eu",
 ];
 
 /// Download YouTube audio via Piped or Invidious JSON APIs (works on Android without yt-dlp).
@@ -488,14 +474,26 @@ async fn resolve_youtube_via_proxy_apis(
         .user_agent(
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
         )
-        .timeout(std::time::Duration::from_secs(25))
+        // Keep short — this is a last resort after yt-dlp/rusty.
+        .timeout(std::time::Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::limited(8))
         .build()
         .map_err(|e| e.to_string())?;
 
     let mut last = String::new();
+    // Prefer a small set so fallback finishes quickly on Android.
+    let bases: &[&str] = if cfg!(target_os = "android") {
+        &[
+            "https://pipedapi.adminforge.de",
+            "https://api.piped.private.coffee",
+            "https://inv.nadeko.net",
+            "https://invidious.nerdvpn.de",
+        ]
+    } else {
+        YT_PROXY_APIS
+    };
 
-    for base in YT_PROXY_APIS {
+    for base in bases {
         let base = base.trim_end_matches('/');
         // Piped: /streams/{id}  |  Invidious: /api/v1/videos/{id}
         let urls = [

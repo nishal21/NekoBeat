@@ -9,12 +9,12 @@ type HifiStatus = {
   bootstrapped?: boolean;
   platform?: string;
   process?: string;
+  probe?: string;
   lastError?: string | null;
   error?: string;
 };
 
 type Props = {
-  /** Only render useful controls on Android; desktop shows a short note. */
   isAndroid: boolean;
 };
 
@@ -25,19 +25,21 @@ export function SpotiFlacHifiCard({ isAndroid }: Props) {
 
   const refresh = useCallback(async () => {
     try {
+      // Local status only — must not start Go worker (that crashed Settings).
       const raw = await invoke<string>("spotiflac_mobile_status");
       const parsed = JSON.parse(raw) as HifiStatus;
       setStatus(parsed);
       setMsg(null);
     } catch (e) {
-      setStatus(null);
+      setStatus({ ok: false, packaged: false, platform: "android" });
       setMsg(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
   useEffect(() => {
+    if (!isAndroid) return;
     void refresh();
-  }, [refresh]);
+  }, [isAndroid, refresh]);
 
   const onBootstrap = async () => {
     setBusy(true);
@@ -58,28 +60,25 @@ export function SpotiFlacHifiCard({ isAndroid }: Props) {
       <section className="settings-card space-y-2">
         <h3 className="text-base sm:text-lg font-display font-bold text-white">SpotiFLAC HiFi</h3>
         <p className="text-sm text-[var(--color-ink-muted)]">
-          On desktop, Spotify HiFi uses the SpotiFLAC CLI sidecar. Android uses an isolated Go worker.
+          On desktop, Spotify HiFi uses the SpotiFLAC CLI sidecar. Android uses an isolated Go worker (off in this build until stable).
         </p>
       </section>
     );
   }
 
   const packaged = !!status?.packaged || !!status?.available;
-  const ready = !!status?.ready || !!status?.bootstrapped;
   const label = !packaged
-    ? "Not packaged in this APK"
-    : ready
-      ? "Ready (isolated :spotiflac process)"
-      : status?.error || status?.lastError
-        ? "Worker error — tap Retry"
-        : "Packaged — bootstrap on first Spotify play";
+    ? "HiFi AAR not in this APK — Spotify still plays via YouTube"
+    : status?.error || status?.lastError
+      ? "Worker error — tap Retry only if you need HiFi"
+      : "Packaged (worker starts only on HiFi / Retry — not when opening Settings)";
 
   return (
     <section className="settings-card space-y-4">
       <div>
         <h3 className="text-base sm:text-lg font-display font-bold text-white">SpotiFLAC HiFi</h3>
         <p className="text-sm text-[var(--color-ink-muted)] mt-1">
-          Lossless upgrade after YouTube starts. Go runs in a separate process so a crash cannot kill playback.
+          Play always uses YouTube first. Lossless upgrade is optional and isolated.
         </p>
       </div>
       <p className="text-sm text-white/90 font-medium">{label}</p>

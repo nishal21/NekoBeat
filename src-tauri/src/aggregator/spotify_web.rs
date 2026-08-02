@@ -75,57 +75,109 @@ async fn fetch_access_token(client: &reqwest::Client) -> Result<String, String> 
         }
     }
 
-    let now_secs = SystemTime::now()
+    let local_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let totp = generate_totp(now_secs)?;
 
-    let url = format!(
-        "https://open.spotify.com/api/token?reason=init&productType=web-player&totp={}&totpServer={}&totpVer={}",
-        totp, totp, SPOTIFY_TOTP_VERSION
-    );
-
-    let res = client
-        .get(&url)
+    // Prefer Spotify server time (TOTP window drift breaks anonymous search on phones).
+    let server_secs = match client
+        .get("https://open.spotify.com/api/server-time")
         .header(
             "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
         )
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| format!("Spotify token request: {}", e))?;
+    {
+        Ok(res) if res.status().is_success() => res
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("serverTime").and_then(|t| t.as_u64()))
+            .unwrap_or(local_secs),
+        _ => local_secs,
+    };
 
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        return Err(format!("Spotify token HTTP {}: {}", status, body.chars().take(160).collect::<String>()));
+    let totp = generate_totp(server_secs)?;
+    let ua = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+
+    // Try init + transport reason (Spotify flips which works).
+    let urls = [
+        format!(
+            "https://open.spotify.com/api/token?reason=init&productType=web-player&totp={}&totpServer={}&totpVer={}&ts={}",
+            totp, totp, SPOTIFY_TOTP_VERSION, server_secs
+        ),
+        format!(
+            "https://open.spotify.com/api/token?reason=transport&productType=web-player&totp={}&totpServer={}&totpVer={}&ts={}",
+            totp, totp, SPOTIFY_TOTP_VERSION, server_secs
+        ),
+    ];
+
+    let mut last_err = String::new();
+    for url in &urls {
+        let res = match client
+            .get(url)
+            .header("User-Agent", ua)
+            .header("Accept", "application/json")
+            .header("Referer", "https://open.spotify.com/")
+            .header("Origin", "https://open.spotify.com")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("Spotify token request: {}", e);
+                continue;
+            }
+        };
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            last_err = format!(
+                "Spotify token HTTP {}: {}",
+                status,
+                body.chars().take(160).collect::<String>()
+            );
+            continue;
+        }
+
+        let json: serde_json::Value = match res.json().await {
+            Ok(j) => j,
+            Err(e) => {
+                last_err = format!("Spotify token parse: {}", e);
+                continue;
+            }
+        };
+
+        let access = match json.get("accessToken").and_then(|v| v.as_str()) {
+            Some(a) => a.to_string(),
+            None => {
+                last_err = "Spotify token: missing accessToken".into();
+                continue;
+            }
+        };
+        let expires_ms = json
+            .get("accessTokenExpirationTimestampMs")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        if let Ok(mut guard) = TOKEN_CACHE.lock() {
+            *guard = Some(CachedToken {
+                access: access.clone(),
+                expires_ms,
+            });
+        }
+        return Ok(access);
     }
 
-    let json: serde_json::Value = res
-        .json()
-        .await
-        .map_err(|e| format!("Spotify token parse: {}", e))?;
-
-    let access = json
-        .get("accessToken")
-        .and_then(|v| v.as_str())
-        .ok_or("Spotify token: missing accessToken")?
-        .to_string();
-    let expires_ms = json
-        .get("accessTokenExpirationTimestampMs")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-
-    if let Ok(mut guard) = TOKEN_CACHE.lock() {
-        *guard = Some(CachedToken {
-            access: access.clone(),
-            expires_ms,
-        });
-    }
-
-    Ok(access)
+    Err(if last_err.is_empty() {
+        "Spotify token failed".into()
+    } else {
+        last_err
+    })
 }
 
 #[derive(Debug, Clone)]

@@ -324,16 +324,6 @@ pub async fn spotiflac_mobile_install_extension(
 }
 
 #[tauri::command]
-pub async fn spotiflac_mobile_bootstrap(app: AppHandle) -> Result<String, String> {
-    #[cfg(target_os = "android")]
-    {
-        // ensureInitialized first so worker process is up
-        let _ = ensure_ready(&app);
-    }
-    bootstrap_extensions(&app)
-}
-
-#[tauri::command]
 pub async fn spotiflac_mobile_status(app: AppHandle) -> Result<String, String> {
     #[cfg(not(target_os = "android"))]
     {
@@ -343,18 +333,43 @@ pub async fn spotiflac_mobile_status(app: AppHandle) -> Result<String, String> {
     #[cfg(target_os = "android")]
     {
         let files = app_files_dir(&app).unwrap_or_else(|_| String::new());
-        with_jni_env(|env, class| {
-            let jpath = env.new_string(&files).map_err(|e| e.to_string())?;
-            let result = env
-                .call_static_method(
-                    class,
-                    "getStatus",
-                    "(Ljava/lang/String;)Ljava/lang/String;",
-                    &[(&jpath).into()],
-                )
-                .map_err(|e| e.to_string())?;
-            let obj = result.l().map_err(|e| e.to_string())?;
-            jni_string(env, obj)
+        // Local probe only — never bind :spotiflac from Settings open.
+        tokio::task::spawn_blocking(move || {
+            with_jni_env(|env, class| {
+                let jpath = env.new_string(&files).map_err(|e| e.to_string())?;
+                let result = env
+                    .call_static_method(
+                        class,
+                        "getStatus",
+                        "(Ljava/lang/String;)Ljava/lang/String;",
+                        &[(&jpath).into()],
+                    )
+                    .map_err(|e| e.to_string())?;
+                let obj = result.l().map_err(|e| e.to_string())?;
+                jni_string(env, obj)
+            })
         })
+        .await
+        .map_err(|e| format!("join: {e}"))?
+    }
+}
+
+#[tauri::command]
+pub async fn spotiflac_mobile_bootstrap(app: AppHandle) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Android-only".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Explicit Retry only — may start :spotiflac worker.
+        let app2 = app.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = ensure_ready(&app2);
+            bootstrap_extensions(&app2)
+        })
+        .await
+        .map_err(|e| format!("join: {e}"))?
     }
 }

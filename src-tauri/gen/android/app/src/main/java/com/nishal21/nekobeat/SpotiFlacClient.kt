@@ -6,10 +6,12 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.Process
 import android.util.Log
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -20,11 +22,12 @@ import java.util.concurrent.atomic.AtomicReference
  * `libgojni` here — all Go work is delegated to [SpotiFlacService] in
  * process `:spotiflac`.
  *
- * Call sites must not block the main looper (Rust uses spawn_blocking).
+ * Reply Messenger uses a dedicated HandlerThread (never MainLooper) so
+ * blocking RPC cannot ANR/deadlock the UI when Settings opens.
  */
 object SpotiFlacClient {
   private const val TAG = "SpotiFlacClient"
-  private const val BIND_TIMEOUT_MS = 20_000L
+  private const val BIND_TIMEOUT_MS = 15_000L
   private const val DEFAULT_RPC_TIMEOUT_MS = 30_000L
   private const val DOWNLOAD_TIMEOUT_MS = 300_000L
 
@@ -33,9 +36,14 @@ object SpotiFlacClient {
   @Volatile private var connection: ServiceConnection? = null
   @Volatile private var lastError: String? = null
 
+  private val replyThread: HandlerThread by lazy {
+    HandlerThread("SpotiFlacClientReply", Process.THREAD_PRIORITY_DEFAULT).also { it.start() }
+  }
+  private val replyLooper: Looper
+    get() = replyThread.looper
+
   @JvmStatic
   fun isAvailable(): Boolean {
-    // Packaging flag only — do NOT Class.forName Gobackend in main process.
     return try {
       BuildConfig.HAS_GOBACKEND
     } catch (_: Throwable) {
@@ -45,6 +53,40 @@ object SpotiFlacClient {
 
   @JvmStatic
   fun lastError(): String = lastError ?: ""
+
+  /**
+   * Lightweight status for Settings — **never** binds the Go worker.
+   * Binding/loading libgojni on Settings open was crashing / ANRing the UI.
+   */
+  @JvmStatic
+  fun getStatus(filesDirPath: String): String {
+    // filesDir unused — local probe only (do not start :spotiflac).
+    if (filesDirPath.isEmpty()) {
+      // no-op keep param for JNI signature stability
+    }
+    val packaged = isAvailable()
+    val err = lastError
+    val errJson = if (err.isNullOrBlank()) "null" else jsonString(err)
+    return """{"ok":true,"available":$packaged,"packaged":$packaged,"ready":false,"bootstrapped":false,"process":"none","platform":"android","probe":"local","lastError":$errJson}"""
+  }
+
+  /** Deep probe (binds `:spotiflac`) — only from explicit Retry / HiFi download. */
+  @JvmStatic
+  fun getStatusDeep(filesDirPath: String): String {
+    val packaged = isAvailable()
+    if (!packaged) {
+      return """{"ok":true,"available":false,"packaged":false,"process":"none","platform":"android","lastError":"AAR not packaged"}"""
+    }
+    val b = Bundle().apply {
+      putString(SpotiFlacService.KEY_FILES_DIR, filesDirPath)
+    }
+    return try {
+      callRemote(SpotiFlacService.MSG_STATUS, b, DEFAULT_RPC_TIMEOUT_MS)
+    } catch (t: Throwable) {
+      lastError = t.message
+      """{"ok":false,"available":true,"packaged":true,"process":"spotiflac","error":${jsonString(t.message ?: t.toString())},"lastError":${jsonString(lastError ?: "")}}"""
+    }
+  }
 
   @JvmStatic
   fun ensureInitialized(filesDirPath: String): String {
@@ -106,23 +148,6 @@ object SpotiFlacClient {
     return callRemote(SpotiFlacService.MSG_INSTALL_EXT, b, DOWNLOAD_TIMEOUT_MS)
   }
 
-  @JvmStatic
-  fun getStatus(filesDirPath: String): String {
-    val packaged = isAvailable()
-    if (!packaged) {
-      return """{"ok":true,"available":false,"packaged":false,"process":"none","platform":"android","lastError":"AAR not packaged"}"""
-    }
-    val b = Bundle().apply {
-      putString(SpotiFlacService.KEY_FILES_DIR, filesDirPath)
-    }
-    return try {
-      callRemote(SpotiFlacService.MSG_STATUS, b, DEFAULT_RPC_TIMEOUT_MS)
-    } catch (t: Throwable) {
-      lastError = t.message
-      """{"ok":false,"available":true,"packaged":true,"process":"spotiflac","error":${jsonString(t.message ?: t.toString())},"lastError":${jsonString(lastError ?: "")}}"""
-    }
-  }
-
   private fun callRemote(what: Int, data: Bundle, timeoutMs: Long): String {
     return try {
       ensureBound()
@@ -131,7 +156,8 @@ object SpotiFlacClient {
 
       val latch = CountDownLatch(1)
       val resultBox = AtomicReference("""{"ok":false,"error":"timeout"}""")
-      val replyHandler = object : Handler(Looper.getMainLooper()) {
+      // Dedicated looper — NEVER MainLooper (Settings invoke + await = ANR/deadlock).
+      val replyHandler = object : Handler(replyLooper) {
         override fun handleMessage(msg: Message) {
           resultBox.set(msg.data?.getString(SpotiFlacService.KEY_RESULT) ?: "{}")
           latch.countDown()
@@ -150,7 +176,6 @@ object SpotiFlacClient {
     } catch (t: Throwable) {
       lastError = t.message ?: t.toString()
       Log.e(TAG, "callRemote what=$what failed", t)
-      // Drop binder so next call rebinds (worker may have crashed).
       serviceMessenger.set(null)
       """{"ok":false,"success":false,"error":${jsonString(lastError!!)}}"""
     }

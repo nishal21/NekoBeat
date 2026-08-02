@@ -270,7 +270,14 @@ async fn search_spotify(app: &tauri::AppHandle, query: &str, page: u32) -> Resul
 }
 
 async fn spotify_web_to_tracks(query: &str, offset: u32) -> Result<Vec<ExternalTrack>, String> {
-    let hits = crate::aggregator::spotify_web::search_tracks(query, 20, offset).await?;
+    let hits = match crate::aggregator::spotify_web::search_tracks(query, 20, offset).await {
+        Ok(h) => h,
+        Err(e) => {
+            // Soft-skip so Browse "all" still shows YouTube / SoundCloud.
+            eprintln!("Spotify web search soft-skip: {}", e);
+            return Err(format!("soft-skip: {}", e));
+        }
+    };
     let tracks: Vec<ExternalTrack> = hits
         .into_iter()
         .map(|h| ExternalTrack {
@@ -285,7 +292,8 @@ async fn spotify_web_to_tracks(query: &str, offset: u32) -> Result<Vec<ExternalT
         })
         .collect();
     if tracks.is_empty() {
-        return Err(format!("No Spotify results for '{}'", query));
+        return Err(format!("soft-skip: No Spotify results for '{}'", query));
     }
+    println!("Spotify: Found {} tracks via web for '{}'", tracks.len(), query);
     Ok(tracks)
 }
