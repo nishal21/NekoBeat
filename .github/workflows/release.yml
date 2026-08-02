@@ -367,7 +367,15 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          # Match vendor/SpotiFLAC-Mobile-go/go_backend/go.mod (gomobile bind)
+          go-version: '1.26.5'
+
+      - name: Build SpotiFLAC-Mobile gobackend.aar (gomobile)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/build-gobackend-aar.sh
+          bash scripts/build-gobackend-aar.sh
+          test -f src-tauri/gen/android/app/libs/gobackend.aar
 
       - name: Build SpotiFLAC Android sidecars
         run: bash scripts/build-spotiflac-android.sh

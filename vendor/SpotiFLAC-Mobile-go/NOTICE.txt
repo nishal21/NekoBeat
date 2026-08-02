@@ -1,0 +1,4 @@
+SpotiFLAC-Mobile go_backend (MIT)
+Upstream: https://github.com/spotiflacapp/SpotiFLAC-Mobile
+Vendored for NekoBeat Android Spotify downloads via gomobile AAR.
+See LICENSE and UPSTREAM_COMMIT.txt.

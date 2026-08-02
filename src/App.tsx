@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
-import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, FolderSearch, Music, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, Download, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, FolderSearch, Music, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, EQ_PRESETS, useAudioClock, getAudioClock, seedAudioClockDuration, isResumeGuarded, isRealArtworkUrl, toDisplayArtUrl, usePlayQueue, QueueTrack } from "./hooks";
 // Used for interacting with system dialogs in Tauri
@@ -8,8 +8,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
-import { check } from "@tauri-apps/plugin-updater";
 import logoImg from "./assets/logo.png";
+import { UpdateNotification, UpdateSettingsCard } from "./UpdateToast";
+import type { AvailableUpdate } from "./updates";
 
 type RecentPlay = {
   id: string;
@@ -588,11 +589,11 @@ const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyr
 
 const ViewToggle = memo(({ viewMode, onChange }: { viewMode: 'grid' | 'list', onChange: (mode: 'grid' | 'list') => void }) => {
   return (
-    <div className="inline-flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10 shrink-0 self-start">
+    <div className="inline-flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10 shrink-0 h-11">
       <button
         type="button"
         onClick={() => onChange('grid')}
-        className={`p-2.5 md:p-1.5 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 rounded-lg transition-all flex items-center justify-center ${viewMode === 'grid' ? 'bg-[var(--color-neon-yellow)] text-black' : 'text-neutral-400 hover:text-white hover:bg-white/5'}`}
+        className={`p-2 md:p-1.5 min-w-[40px] h-9 md:min-w-0 md:h-auto rounded-lg transition-all flex items-center justify-center ${viewMode === 'grid' ? 'bg-[var(--color-neon-yellow)] text-black' : 'text-neutral-400 hover:text-white hover:bg-white/5'}`}
         title="Grid View"
         aria-label="Grid view"
         aria-pressed={viewMode === 'grid'}
@@ -602,7 +603,7 @@ const ViewToggle = memo(({ viewMode, onChange }: { viewMode: 'grid' | 'list', on
       <button
         type="button"
         onClick={() => onChange('list')}
-        className={`p-2.5 md:p-1.5 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 rounded-lg transition-all flex items-center justify-center ${viewMode === 'list' ? 'bg-[var(--color-neon-yellow)] text-black' : 'text-neutral-400 hover:text-white hover:bg-white/5'}`}
+        className={`p-2 md:p-1.5 min-w-[40px] h-9 md:min-w-0 md:h-auto rounded-lg transition-all flex items-center justify-center ${viewMode === 'list' ? 'bg-[var(--color-neon-yellow)] text-black' : 'text-neutral-400 hover:text-white hover:bg-white/5'}`}
         title="List View"
         aria-label="List view"
         aria-pressed={viewMode === 'list'}
@@ -959,29 +960,20 @@ function App() {
     return (saved as 'grid' | 'list') || 'grid';
   });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ version: string, date?: string, body?: string } | null>(null);
   const [streamError, setStreamError] = useState<{ message: string, trackTitle?: string, trackArtist?: string, source?: string, previewUrl?: string } | null>(null);
+  const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
+  const [updateForce, setUpdateForce] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateUpToDate, setUpdateUpToDate] = useState(false);
+  const [updateErr, setUpdateErr] = useState<string | undefined>();
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
 
-  // Auto-Updater Check
   useEffect(() => {
-    const checkUpdate = async () => {
-      try {
-        const update = await check();
-        if (update) {
-          console.log(`Update available: ${update.version}`);
-          setUpdateInfo({
-            version: update.version,
-            date: update.date,
-            body: update.body
-          });
-        }
-      } catch (e) {
-        console.error("Failed to check for updates:", e);
-      }
-    };
-    // Check for updates on startup with a slight delay
-    const timer = setTimeout(checkUpdate, 3000);
-    return () => clearTimeout(timer);
+    import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
   }, []);
 
   useEffect(() => {
@@ -2070,57 +2062,19 @@ function App() {
     );
   }
 
-  const handleUpdate = async () => {
-    if (!updateInfo) return;
-    try {
-      // Find the update again to get the update object
-      const update = await check();
-      if (update) {
-        console.log("Downloading and installing update...");
-        await update.downloadAndInstall();
-      }
-    } catch (e) {
-      console.error("Update failed:", e);
-    }
-  };
-
   return (
     <div className="flex flex-col md:flex-row h-screen w-full bg-[var(--color-surface-base)] text-white overflow-hidden font-sans select-none relative main-container">
-      {/* Update Toast */}
-      <AnimatePresence>
-        {updateInfo && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 50, scale: 0.9 }}
-            className="fixed bottom-24 right-8 z-[100] bg-zinc-900/40 backdrop-blur-3xl border border-[var(--color-neon-yellow)]/30 p-6 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] max-w-sm"
-          >
-            <div className="flex items-start gap-4">
-              <div className="bg-[var(--color-neon-yellow)]/10 p-3 rounded-2xl">
-                <Download className="text-[var(--color-neon-yellow)]" size={24} />
-              </div>
-              <div className="flex-1">
-                <h4 className="text-lg font-black text-white leading-tight">New Sonic Update!</h4>
-                <p className="text-sm text-neutral-400 mt-1">Version {updateInfo.version} is ready to drop.</p>
-                <div className="flex items-center gap-3 mt-4">
-                  <button
-                    onClick={handleUpdate}
-                    className="bg-[var(--color-neon-yellow)] text-black px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(219,255,0,0.3)]"
-                  >
-                    Install Now
-                  </button>
-                  <button
-                    onClick={() => setUpdateInfo(null)}
-                    className="text-neutral-500 hover:text-white text-xs font-bold px-2 py-1"
-                  >
-                    Later
-                  </button>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <UpdateNotification
+        checkNonce={updateCheckNonce}
+        force={updateForce}
+        onStatus={(s) => {
+          setUpdateChecking(s.checking);
+          if (s.current) setAppVersion(s.current);
+          setAvailableUpdate(s.update);
+          setUpdateErr(s.error);
+          if (!s.checking) setUpdateUpToDate(!!s.upToDate && !s.update);
+        }}
+      />
       {/* Stream Error / Preview Toast */}
       <AnimatePresence>
         {streamError && (
@@ -2224,34 +2178,37 @@ function App() {
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-6 md:mb-8">
                 <h1 className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tighter leading-none">Your Library</h1>
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <ViewToggle viewMode={viewMode} onChange={setViewMode} />
                   {isMobileOs ? (
                     <>
                       <button
+                        type="button"
                         onClick={handleScanClick}
                         disabled={isScanning}
-                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl transition-all font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)]"
+                        className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-xs disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_8px_20px_rgba(219,255,0,0.35)]"
                       >
-                        <FolderSearch size={16} />
-                        <span>{isScanning ? "Scanning…" : "Scan device music"}</span>
+                        <FolderSearch size={15} className="shrink-0" />
+                        <span>{isScanning ? "Scanning…" : "Scan music"}</span>
                       </button>
                       <button
+                        type="button"
                         onClick={handleAddSongsClick}
                         disabled={isScanning}
-                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-white/10 text-white border border-white/15 rounded-xl font-bold text-sm disabled:opacity-50"
+                        className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-white/10 text-white border border-white/15 rounded-xl font-bold text-xs disabled:opacity-50"
                       >
-                        <Music size={16} />
+                        <Music size={15} className="shrink-0" />
                         <span>Add songs</span>
                       </button>
                     </>
                   ) : (
                     <button
+                      type="button"
                       onClick={handleScanClick}
                       disabled={isScanning}
-                      className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl transition-all font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)] hover:shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_15px_40px_rgba(219,255,0,0.6)] hover:-translate-y-1"
+                      className="inline-flex h-11 shrink-0 items-center justify-center gap-2 px-5 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)] hover:shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_15px_40px_rgba(219,255,0,0.6)] hover:-translate-y-1"
                     >
-                      <FolderOpen size={16} />
+                      <FolderOpen size={16} className="shrink-0" />
                       <span>{isScanning ? "Scanning folder…" : "Add folder"}</span>
                     </button>
                   )}
@@ -2625,6 +2582,18 @@ function App() {
               <section className="settings-card">
                 <Equalizer />
               </section>
+
+              <UpdateSettingsCard
+                currentVersion={appVersion}
+                checking={updateChecking}
+                upToDate={updateUpToDate}
+                error={updateErr}
+                update={availableUpdate}
+                onCheck={() => {
+                  setUpdateForce(true);
+                  setUpdateCheckNonce((n) => n + 1);
+                }}
+              />
 
               <section className="settings-card space-y-4">
                 <div>

@@ -9,6 +9,7 @@ pub mod path_util;
 pub mod sidecar_util;
 pub mod android_bin;
 pub mod gst_init;
+pub mod spotiflac_mobile;
 
 #[cfg(not(mobile))]
 use tauri::{
@@ -55,7 +56,9 @@ pub fn run() {
 
     #[cfg(not(mobile))]
     {
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
     }
 
     let builder = builder
@@ -66,6 +69,17 @@ pub fn run() {
             let audio_state = audio::init_audio_thread(app.handle().clone());
             app.manage(audio_state);
 
+            #[cfg(target_os = "android")]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match crate::spotiflac_mobile::ensure_ready(&handle) {
+                        Ok(()) => println!("SpotiFLAC-Mobile: AAR ready + extensions bootstrapped"),
+                        Err(e) => eprintln!("SpotiFLAC-Mobile: init skipped ({e})"),
+                    }
+                });
+            }
+
             #[cfg(not(mobile))]
             setup_desktop(app)?;
 
@@ -74,6 +88,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             log_frontend,
+            spotiflac_mobile::spotiflac_mobile_download,
+            spotiflac_mobile::spotiflac_mobile_progress,
+            spotiflac_mobile::spotiflac_mobile_cancel,
+            spotiflac_mobile::spotiflac_mobile_install_extension,
+            spotiflac_mobile::spotiflac_mobile_bootstrap,
             audio::play_audio,
             audio::pause_audio,
             audio::resume_audio,

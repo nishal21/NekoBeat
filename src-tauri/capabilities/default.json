@@ -19,6 +19,9 @@
     "core:window:allow-start-dragging",
     "updater:default",
     "updater:allow-check",
-    "updater:allow-download-and-install"
+    "updater:allow-download-and-install",
+    "process:default",
+    "process:allow-restart",
+    "process:allow-exit"
   ]
 }

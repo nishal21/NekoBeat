@@ -28,6 +28,14 @@ dist-ssr
 cookies.txt
 .cursor/
 
+# SpotiFLAC-Mobile gomobile AAR (built in CI via scripts/build-gobackend-aar.sh)
+src-tauri/gen/android/app/libs/gobackend.aar
+src-tauri/gen/android/app/libs/gobackend-sources.jar
+
+# graphify
+graphify-out/
+src-tauri/src/graphify-out/
+
 # Updater signing keys (NEVER commit the private key!)
 .tauri/nekobeat.key
 .tauri/nekobeat.key.bak

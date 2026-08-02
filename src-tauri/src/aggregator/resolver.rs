@@ -171,16 +171,25 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
     let ytdlp = crate::process_util::find_ytdlp();
     let mut last_err = String::new();
 
-    // Always try in-process download on Android first (no yt-dlp required).
+    // Android / when CDN PO-tokens break rusty: Piped/Invidious proxy download first.
+    // Also used as late fallback on desktop after yt-dlp/rusty.
     #[cfg(target_os = "android")]
     {
+        match resolve_youtube_via_proxy_apis(&cache_dir, &video_id).await {
+            Ok(uri) => return Ok(uri),
+            Err(e) => {
+                push_err(&mut last_err, format!("proxy: {}", e));
+                println!("YouTube: proxy APIs failed ({}) — trying rusty/yt-dlp", e);
+            }
+        }
+
         match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
             Ok(uri) => return Ok(uri),
             Err(e) => {
-                last_err = format!("rusty_ytdl: {}", e);
+                push_err(&mut last_err, format!("rusty_ytdl: {}", e));
                 println!(
                     "YouTube: rusty_ytdl failed on Android ({}) — trying yt-dlp if present",
-                    last_err
+                    e
                 );
             }
         }
@@ -268,19 +277,27 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
         }
     }
 
-    // Desktop: yt-dlp first, then rusty. Android already tried rusty above — try again
-    // with a fresh attempt (covers transient CDN failures).
-    match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
+    // Desktop: yt-dlp first, then rusty, then Piped/Invidious proxies.
+    // Android already tried proxy + rusty above.
+    #[cfg(not(target_os = "android"))]
+    {
+        match resolve_youtube_rusty(&cache_dir, url, &video_id).await {
+            Ok(uri) => return Ok(uri),
+            Err(e) => push_err(&mut last_err, format!("rusty_ytdl: {}", e)),
+        }
+    }
+
+    match resolve_youtube_via_proxy_apis(&cache_dir, &video_id).await {
         Ok(uri) => return Ok(uri),
-        Err(e) => push_err(&mut last_err, format!("rusty_ytdl: {}", e)),
+        Err(e) => push_err(&mut last_err, format!("proxy: {}", e)),
     }
 
     Err(format!(
-        "YouTube download failed: {}",
+        "YouTube download failed (Piped/Invidious + rusty/yt-dlp): {}",
         if last_err.is_empty() {
-            "unknown error".into()
+            "unknown error — all proxies unreachable".to_string()
         } else {
-            last_err
+            last_err.chars().take(360).collect::<String>()
         }
     ))
 }
@@ -413,9 +430,10 @@ fn file_big_enough(path: &Path) -> bool {
 async fn download_url_to_file(url: &str, out_path: &Path) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .user_agent(
-            "com.google.android.youtube/19.45.36 (Linux; U; Android 12) gzip",
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
         )
         .timeout(std::time::Duration::from_secs(180))
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -438,8 +456,208 @@ async fn download_url_to_file(url: &str, out_path: &Path) -> Result<(), String> 
         return Err(format!("body too small ({} bytes)", bytes.len()));
     }
 
-    std::fs::write(out_path, &bytes).map_err(|e| format!("write: {}", e))?;
+    if let Some(parent) = out_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = out_path.with_extension("part");
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("write: {}", e))?;
+    std::fs::rename(&tmp, out_path).map_err(|e| format!("rename: {}", e))?;
     Ok(())
+}
+
+/// Public Piped / Invidious instances — proxy stream URLs (avoids googlevideo 403 / PO token).
+const YT_PROXY_APIS: &[&str] = &[
+    "https://pipedapi.adminforge.de",
+    "https://pipedapi.nosebs.ru",
+    "https://api.piped.private.coffee",
+    "https://pipedapi.darkness.services",
+    "https://pipedapi.kavin.rocks",
+    "https://pipedapi.syncpundit.io",
+    "https://invidious.nerdvpn.de",
+    "https://inv.nadeko.net",
+    "https://yewtu.be",
+    "https://invidious.fdn.fr",
+];
+
+/// Download YouTube audio via Piped or Invidious JSON APIs (works on Android without yt-dlp).
+async fn resolve_youtube_via_proxy_apis(
+    cache_dir: &Path,
+    video_id: &str,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(25))
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut last = String::new();
+
+    for base in YT_PROXY_APIS {
+        let base = base.trim_end_matches('/');
+        // Piped: /streams/{id}  |  Invidious: /api/v1/videos/{id}
+        let urls = [
+            format!("{}/streams/{}", base, video_id),
+            format!("{}/api/v1/videos/{}", base, video_id),
+        ];
+
+        for api_url in urls {
+            let res = match client.get(&api_url).header("Accept", "application/json").send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    push_err(&mut last, format!("{}: {}", base, e));
+                    continue;
+                }
+            };
+            if !res.status().is_success() {
+                push_err(
+                    &mut last,
+                    format!("{} → HTTP {}", api_url, res.status()),
+                );
+                continue;
+            }
+            let json: serde_json::Value = match res.json().await {
+                Ok(j) => j,
+                Err(e) => {
+                    push_err(&mut last, format!("{} parse: {}", base, e));
+                    continue;
+                }
+            };
+
+            let stream = pick_proxy_audio_url(&json);
+            let Some((audio_url, ext)) = stream else {
+                push_err(&mut last, format!("{}: no audioStreams", base));
+                continue;
+            };
+
+            let out_path = cache_dir.join(format!("{}.{}", video_id, ext));
+            let _ = std::fs::remove_file(&out_path);
+            println!(
+                "YouTube: proxy download via {} → {}",
+                base,
+                &audio_url[..std::cmp::min(audio_url.len(), 80)]
+            );
+            match download_url_to_file(&audio_url, &out_path).await {
+                Ok(()) if file_big_enough(&out_path) => {
+                    println!(
+                        "YouTube: proxy saved {:?} ({} bytes)",
+                        out_path,
+                        std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0)
+                    );
+                    return Ok(crate::path_util::path_to_file_uri(&out_path));
+                }
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&out_path);
+                    push_err(&mut last, format!("{}: file too small", base));
+                }
+                Err(e) => push_err(&mut last, format!("{} download: {}", base, e)),
+            }
+        }
+    }
+
+    Err(if last.is_empty() {
+        "all Piped/Invidious proxies failed".into()
+    } else {
+        last.chars().take(280).collect()
+    })
+}
+
+fn pick_proxy_audio_url(json: &serde_json::Value) -> Option<(String, String)> {
+    // Piped: audioStreams[{url, mimeType, quality}]
+    // Invidious: adaptiveFormats[{url, type, container}] + formatStreams
+    let mut candidates: Vec<(i32, String, String)> = Vec::new();
+
+    if let Some(arr) = json.get("audioStreams").and_then(|v| v.as_array()) {
+        for item in arr {
+            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if url.is_empty() {
+                continue;
+            }
+            let mime = item
+                .get("mimeType")
+                .or_else(|| item.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let ext = if mime.contains("mp4") || mime.contains("m4a") {
+                "m4a"
+            } else if mime.contains("webm") {
+                "webm"
+            } else if mime.contains("mpeg") || mime.contains("mp3") {
+                "mp3"
+            } else {
+                "m4a"
+            };
+            let bitrate = item
+                .get("bitrate")
+                .and_then(|v| v.as_u64())
+                .or_else(|| {
+                    item.get("quality")
+                        .and_then(|v| v.as_str())
+                        .and_then(|q| q.trim_end_matches(" kbps").parse().ok())
+                })
+                .unwrap_or(0) as i32;
+            let rank = if ext == "m4a" { 100_000 } else { 0 } + bitrate;
+            candidates.push((rank, url, ext.to_string()));
+        }
+    }
+
+    if let Some(arr) = json.get("adaptiveFormats").and_then(|v| v.as_array()) {
+        for item in arr {
+            let typ = item
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !typ.starts_with("audio/") {
+                continue;
+            }
+            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if url.is_empty() {
+                continue;
+            }
+            let ext = if typ.contains("mp4") {
+                "m4a"
+            } else if typ.contains("webm") {
+                "webm"
+            } else {
+                "m4a"
+            };
+            let bitrate = item
+                .get("bitrate")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+                .or_else(|| item.get("bitrate").and_then(|v| v.as_u64()))
+                .unwrap_or(0) as i32;
+            let rank = if ext == "m4a" { 100_000 } else { 0 } + bitrate;
+            candidates.push((rank, url, ext.to_string()));
+        }
+    }
+
+    // Progressive muxed (itag 18) — last resort but often works
+    if let Some(arr) = json.get("formatStreams").and_then(|v| v.as_array()) {
+        for item in arr {
+            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if url.is_empty() {
+                continue;
+            }
+            let container = item
+                .get("container")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mp4")
+                .to_lowercase();
+            let ext = if container.contains("mp4") { "mp4" } else { "webm" };
+            candidates.push((1, url, ext.to_string()));
+        }
+    }
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, url, ext)| (url, ext))
 }
 
 /// Resolve a YouTube search query → download best-matching hit → local file URI.
@@ -934,7 +1152,15 @@ async fn resolve_soundcloud_download(app: &AppHandle, url: &str) -> Result<Strin
                 "SoundCloud: SNIP/preview — trying YouTube full match for '{}'",
                 query
             );
-            match resolve_youtube_search(app, &query).await {
+            match resolve_youtube_search_matched(
+                app,
+                &query,
+                Some(title.as_str()),
+                Some(artist.as_str()),
+                None,
+            )
+            .await
+            {
                 Ok(yt) => {
                     println!("SoundCloud: YouTube fallback OK");
                     return Ok(yt);
@@ -944,14 +1170,24 @@ async fn resolve_soundcloud_download(app: &AppHandle, url: &str) -> Result<Strin
         }
     }
 
-    // Prefer progressive HTTP audio. If we only got HLS, fall back to YouTube by failing up.
+    // Prefer progressive HTTP audio. If we only got HLS, fall back to YouTube by title/artist.
     if stream_url.contains(".m3u8") || stream_url.contains("/playlist/") {
         if let Ok((title, artist)) = crate::aggregator::soundcloud::fetch_title_artist(url).await {
             let query = format!("{} {}", artist, title).trim().to_string();
-            return resolve_youtube_search(app, &query).await;
+            return resolve_youtube_search_matched(
+                app,
+                &query,
+                Some(title.as_str()),
+                Some(artist.as_str()),
+                None,
+            )
+            .await
+            .map_err(|e| {
+                format!("SoundCloud: HLS-only and YouTube proxy fallback failed ({e})")
+            });
         }
         return Err(
-            "SoundCloud: only HLS available and CDN streaming is broken on this build — try another track"
+            "SoundCloud: only HLS available and CDN streaming is broken — no title for YouTube fallback"
                 .into(),
         );
     }
@@ -981,9 +1217,21 @@ async fn resolve_soundcloud_download(app: &AppHandle, url: &str) -> Result<Strin
             if let Ok((title, artist)) = crate::aggregator::soundcloud::fetch_title_artist(url).await
             {
                 let query = format!("{} {}", artist, title).trim().to_string();
-                resolve_youtube_search(app, &query).await
+                resolve_youtube_search_matched(
+                    app,
+                    &query,
+                    Some(title.as_str()),
+                    Some(artist.as_str()),
+                    None,
+                )
+                .await
+                .map_err(|yt_e| {
+                    format!("SoundCloud play failed (direct: {e}; YouTube proxy: {yt_e})")
+                })
             } else {
-                Err(e)
+                Err(format!(
+                    "SoundCloud play failed: {e} (no title/artist for YouTube fallback)"
+                ))
             }
         }
     }
