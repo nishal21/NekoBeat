@@ -69,16 +69,8 @@ pub fn run() {
             let audio_state = audio::init_audio_thread(app.handle().clone());
             app.manage(audio_state);
 
-            #[cfg(target_os = "android")]
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    match crate::spotiflac_mobile::ensure_ready(&handle) {
-                        Ok(()) => println!("SpotiFLAC-Mobile: AAR ready + extensions bootstrapped"),
-                        Err(e) => eprintln!("SpotiFLAC-Mobile: init skipped ({e})"),
-                    }
-                });
-            }
+            // Do NOT init SpotiFLAC Go in the main process — libgojni lives in
+            // :spotiflac (SpotiFlacService). HiFi starts on first Spotify play.
 
             #[cfg(not(mobile))]
             setup_desktop(app)?;
@@ -93,6 +85,7 @@ pub fn run() {
             spotiflac_mobile::spotiflac_mobile_cancel,
             spotiflac_mobile::spotiflac_mobile_install_extension,
             spotiflac_mobile::spotiflac_mobile_bootstrap,
+            spotiflac_mobile::spotiflac_mobile_status,
             audio::play_audio,
             audio::pause_audio,
             audio::resume_audio,

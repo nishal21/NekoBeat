@@ -10,6 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
 import logoImg from "./assets/logo.png";
 import { UpdateNotification, UpdateSettingsCard } from "./UpdateToast";
+import { SpotiFlacHifiCard } from "./SpotiFlacHifiCard";
 import type { AvailableUpdate } from "./updates";
 
 type RecentPlay = {
@@ -875,6 +876,7 @@ function App() {
 
   const { tracks, isScanning, scanDirectory, importAudioFiles, scanDeviceMusic, clearLibrary } = useLibrary();
   const [isMobileOs, setIsMobileOs] = useState(false);
+  const [isAndroidOs, setIsAndroidOs] = useState(false);
   const { results: searchResults, isLoading: isSearching, isLoadingMore, hasMore, search: performSearch, loadMore, sourceErrors, error: searchError } = useAggregatorSearch();
   const { likedTracks, isLiking, toggleLike } = useLikedLibrary();
   const playQueue = usePlayQueue();
@@ -1889,10 +1891,16 @@ function App() {
     (async () => {
       try {
         const plat = await invoke<string>('runtime_platform');
-        if (!cancelled) setIsMobileOs(plat === 'android' || plat === 'ios');
+        if (!cancelled) {
+          setIsMobileOs(plat === 'android' || plat === 'ios');
+          setIsAndroidOs(plat === 'android');
+        }
       } catch {
         const ua = navigator.userAgent || '';
-        if (!cancelled) setIsMobileOs(/Android|iPhone|iPad/i.test(ua));
+        if (!cancelled) {
+          setIsMobileOs(/Android|iPhone|iPad/i.test(ua));
+          setIsAndroidOs(/Android/i.test(ua));
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -2594,6 +2602,8 @@ function App() {
                   setUpdateCheckNonce((n) => n + 1);
                 }}
               />
+
+              <SpotiFlacHifiCard isAndroid={isAndroidOs} />
 
               <section className="settings-card space-y-4">
                 <div>

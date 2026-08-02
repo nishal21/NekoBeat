@@ -90,56 +90,8 @@ async fn resolve_spotify_url_inner(
         artist.split(',').next().unwrap_or(&artist),
     );
 
-    // 2) Android: SpotiFLAC-Mobile AAR download first (extensions) → local file:// for GStreamer.
-    #[cfg(target_os = "android")]
-    {
-        if crate::spotiflac_mobile::aar_available() {
-            println!("Spotify: Android AAR download first for '{} — {}'", artist, title);
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(90),
-                crate::spotiflac_mobile::download_track(
-                    app,
-                    url,
-                    &clean_title,
-                    &clean_artist,
-                    hint_duration_ms,
-                ),
-            )
-            .await
-            {
-                Ok(Ok(path)) => {
-                    let file_uri = crate::path_util::path_to_file_uri(&path);
-                    println!("Spotify: AAR ready at {:?}", path);
-                    if let Some(ref id) = track_id {
-                        crate::offline::update_local_audio_path_for_track(app, id, &path);
-                    }
-                    if !warm_cache_only {
-                        let _ = app.emit(
-                            "spotify-hifi-ready",
-                            serde_json::json!({
-                                "id": track_id,
-                                "path": path.to_string_lossy(),
-                                "title": title,
-                                "artist": artist,
-                            }),
-                        );
-                    }
-                    return Ok(file_uri);
-                }
-                Ok(Err(e)) => {
-                    eprintln!("Spotify: AAR download failed ({e}) — YouTube match fallback");
-                }
-                Err(_) => {
-                    eprintln!("Spotify: AAR download timed out — YouTube match fallback");
-                }
-            }
-        } else {
-            println!("Spotify: gobackend.aar unavailable — YouTube match fallback");
-        }
-    }
-
-    // 3) YouTube match — score candidates so we don't play a different song
-    //    (desktop primary path; Android last-resort when AAR fails).
+    // Instant YouTube match — same primary path on desktop and Android
+    // (Android Go AAR is optional background only; never block playback).
     let mut query = format!("{} {}", clean_artist, clean_title)
         .trim()
         .to_string();
@@ -188,7 +140,7 @@ async fn resolve_spotify_url_inner(
         return Ok(stream);
     }
 
-    // 4) Background silent HiFi (desktop CLI; Android AAR already tried above)
+    // Background silent HiFi — desktop CLI; Android Go AAR in :spotiflac process.
     #[cfg(not(target_os = "android"))]
     {
         let app_bg = app.clone();
@@ -218,6 +170,46 @@ async fn resolve_spotify_url_inner(
                 }
             }
         });
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        if crate::spotiflac_mobile::aar_available() {
+            let app_bg = app.clone();
+            let url_bg = url.to_string();
+            let id_bg = track_id.clone();
+            let title_bg = title.clone();
+            let artist_bg = artist.clone();
+            let clean_t = clean_title.clone();
+            let clean_a = clean_artist.clone();
+            let dur = hint_duration_ms;
+            tauri::async_runtime::spawn(async move {
+                match crate::spotiflac_mobile::download_track(
+                    &app_bg, &url_bg, &clean_t, &clean_a, dur,
+                )
+                .await
+                {
+                    Ok(path) => {
+                        println!("Spotify: Android AAR HiFi ready at {:?}", path);
+                        if let Some(ref id) = id_bg {
+                            crate::offline::update_local_audio_path_for_track(&app_bg, id, &path);
+                        }
+                        let _ = app_bg.emit(
+                            "spotify-hifi-ready",
+                            serde_json::json!({
+                                "id": id_bg,
+                                "path": path.to_string_lossy(),
+                                "title": title_bg,
+                                "artist": artist_bg,
+                            }),
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Spotify: Android AAR HiFi failed (non-fatal): {e}");
+                    }
+                }
+            });
+        }
     }
 
     Ok(stream)

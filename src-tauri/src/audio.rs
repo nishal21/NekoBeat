@@ -34,9 +34,25 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         });
 
         use gstreamer::prelude::*;
-        let playbin = gstreamer::ElementFactory::make("playbin")
-            .build()
-            .expect("Failed to create playbin element");
+        let playbin = match gstreamer::ElementFactory::make("playbin").build() {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = format!("Failed to create playbin element: {e}");
+                eprintln!("{msg}");
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(f, "{msg}")
+                    });
+                let _ = app_handle.emit("audio-error", msg);
+                // Stay alive so the UI can open; drain commands without panicking.
+                while rx.recv().is_ok() {}
+                return;
+            }
+        };
 
         // Disable video rendering — we only need audio
         let fakesink = gstreamer::ElementFactory::make("fakesink").build().ok();
@@ -58,7 +74,10 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
         playbin.connect("source-setup", false, move |args| {
-            let source = args[1].get::<gstreamer::Element>().unwrap();
+            let source = match args[1].get::<gstreamer::Element>() {
+                Ok(s) => s,
+                Err(_) => return None,
+            };
 
             let uri: String = if source.has_property("location", None) {
                 source.property::<String>("location")
@@ -108,9 +127,12 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
 
         let equalizer = gstreamer::ElementFactory::make("equalizer-10bands")
             .build()
-            .expect("Failed to create equalizer element");
-
-        playbin.set_property("audio-filter", &equalizer);
+            .ok();
+        if let Some(ref eq) = equalizer {
+            playbin.set_property("audio-filter", eq);
+        } else {
+            eprintln!("GStreamer: equalizer-10bands unavailable — EQ disabled");
+        }
 
         // Android: OpenSLES sink element is openslessink (plugin name "opensles")
         #[cfg(target_os = "android")]
@@ -142,7 +164,16 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         // Ignore Seek briefly after Play — stale UI seeks were jumping new tracks to ~EOF
         let mut play_guard_until = std::time::Instant::now();
 
-        let bus = playbin.bus().expect("Failed to get bus from playbin");
+        let bus = match playbin.bus() {
+            Some(b) => b,
+            None => {
+                let msg = "Failed to get bus from playbin".to_string();
+                eprintln!("{msg}");
+                let _ = app_handle.emit("audio-error", msg);
+                while rx.recv().is_ok() {}
+                return;
+            }
+        };
         let app_handle_for_bus = app_handle.clone();
 
         // Helper to handle state change errors without panicking
@@ -198,9 +229,11 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         playbin.set_property("uri", &uri);
                         // Re-apply volume and EQ after pipeline reset
                         playbin.set_property("volume", &current_volume);
-                        for (i, &g) in current_eq.iter().enumerate() {
-                            if g != 0.0 {
-                                equalizer.set_property(&format!("band{}", i), &g);
+                        if let Some(ref eq) = equalizer {
+                            for (i, &g) in current_eq.iter().enumerate() {
+                                if g != 0.0 {
+                                    eq.set_property(&format!("band{}", i), &g);
+                                }
                             }
                         }
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
@@ -228,9 +261,11 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         playbin.set_property("uri", &url);
                         // Re-apply volume and EQ after pipeline reset
                         playbin.set_property("volume", &current_volume);
-                        for (i, &g) in current_eq.iter().enumerate() {
-                            if g != 0.0 {
-                                equalizer.set_property(&format!("band{}", i), &g);
+                        if let Some(ref eq) = equalizer {
+                            for (i, &g) in current_eq.iter().enumerate() {
+                                if g != 0.0 {
+                                    eq.set_property(&format!("band{}", i), &g);
+                                }
                             }
                         }
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
@@ -298,8 +333,10 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         if (band as usize) < current_eq.len() {
                             let clamped_gain = gain.clamp(-24.0, 12.0);
                             current_eq[band as usize] = clamped_gain;
-                            let prop_name = format!("band{}", band);
-                            equalizer.set_property(&prop_name, &clamped_gain);
+                            if let Some(ref eq) = equalizer {
+                                let prop_name = format!("band{}", band);
+                                eq.set_property(&prop_name, &clamped_gain);
+                            }
                         }
                     }
                     AudioCommand::GetPosition(reply_tx) => {

@@ -1,4 +1,5 @@
-//! Android: SpotiFLAC-Mobile Go AAR via JNI (`gobackend.DownloadByStrategy` + extensions).
+//! Android: SpotiFLAC-Mobile Go AAR via isolated `:spotiflac` process.
+//! Main process talks to [SpotiFlacClient] only — never loads libgojni.
 //! Desktop: stubs — keep using `spotiflac-cli`.
 
 use tauri::{AppHandle, Manager};
@@ -6,8 +7,9 @@ use tauri::{AppHandle, Manager};
 #[cfg(target_os = "android")]
 use serde_json::{json, Value};
 
+/// Main-process facade — does not Class.forName Gobackend.
 #[cfg(target_os = "android")]
-const ANDROID_CLASS: &str = "com/nishal21/nekobeat/SpotiFlacMobile";
+const ANDROID_CLASS: &str = "com/nishal21/nekobeat/SpotiFlacClient";
 
 #[cfg(target_os = "android")]
 fn with_jni_env<F, R>(f: F) -> Result<R, String>
@@ -27,7 +29,7 @@ where
         .map_err(|e| format!("JNI attach: {e}"))?;
     let class = env
         .find_class(ANDROID_CLASS)
-        .map_err(|e| format!("find_class SpotiFlacMobile: {e}"))?;
+        .map_err(|e| format!("find_class SpotiFlacClient: {e}"))?;
     f(&mut *env, class)
 }
 
@@ -37,19 +39,22 @@ fn jni_string(env: &mut jni::JNIEnv, obj: jni::objects::JObject) -> Result<Strin
     let java = env
         .get_string(&jstr)
         .map_err(|e| format!("get_string: {e}"))?;
-    // jni 0.21: JavaStr is not Display; use From<JavaStr> for String.
     Ok(String::from(java))
 }
 
-/// True when gobackend.aar is on the classpath (Android only).
+/// True when gobackend.aar is packaged (BuildConfig.HAS_GOBACKEND).
+/// Never loads Go in the main process.
 pub fn aar_available() -> bool {
     #[cfg(target_os = "android")]
     {
-        with_jni_env(|env, class| {
-            let result = env
-                .call_static_method(class, "isAvailable", "()Z", &[])
-                .map_err(|e| format!("isAvailable: {e}"))?;
-            result.z().map_err(|e| format!("bool: {e}"))
+        std::panic::catch_unwind(|| {
+            with_jni_env(|env, class| {
+                let result = env
+                    .call_static_method(class, "isAvailable", "()Z", &[])
+                    .map_err(|e| format!("isAvailable: {e}"))?;
+                result.z().map_err(|e| format!("bool: {e}"))
+            })
+            .unwrap_or(false)
         })
         .unwrap_or(false)
     }
@@ -69,6 +74,7 @@ fn app_files_dir(app: &AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// Init + bootstrap extensions via `:spotiflac` worker (first HiFi request).
 pub fn ensure_ready(app: &AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "android"))]
     {
@@ -79,7 +85,7 @@ pub fn ensure_ready(app: &AppHandle) -> Result<(), String> {
     {
         if !aar_available() {
             return Err(
-                "gobackend.aar not packaged — CI must run scripts/build-gobackend-aar.sh".into(),
+                "gobackend.aar not packaged — CI must set NEKOBEAT_ENABLE_GOBACKEND=1".into(),
             );
         }
         let files = app_files_dir(app)?;
@@ -138,7 +144,7 @@ pub fn bootstrap_extensions(app: &AppHandle) -> Result<String, String> {
     }
 }
 
-/// Download via Go AAR. Returns absolute file path on success.
+/// Download via isolated Go worker. Returns absolute file path on success.
 pub async fn download_track(
     app: &AppHandle,
     spotify_url: &str,
@@ -319,5 +325,36 @@ pub async fn spotiflac_mobile_install_extension(
 
 #[tauri::command]
 pub async fn spotiflac_mobile_bootstrap(app: AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        // ensureInitialized first so worker process is up
+        let _ = ensure_ready(&app);
+    }
     bootstrap_extensions(&app)
+}
+
+#[tauri::command]
+pub async fn spotiflac_mobile_status(app: AppHandle) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(r#"{"ok":true,"available":false,"packaged":false,"platform":"desktop","process":"none"}"#.into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let files = app_files_dir(&app).unwrap_or_else(|_| String::new());
+        with_jni_env(|env, class| {
+            let jpath = env.new_string(&files).map_err(|e| e.to_string())?;
+            let result = env
+                .call_static_method(
+                    class,
+                    "getStatus",
+                    "(Ljava/lang/String;)Ljava/lang/String;",
+                    &[(&jpath).into()],
+                )
+                .map_err(|e| e.to_string())?;
+            let obj = result.l().map_err(|e| e.to_string())?;
+            jni_string(env, obj)
+        })
+    }
 }

@@ -19,6 +19,12 @@ val gstRoot: String = System.getenv("GSTREAMER_ROOT_ANDROID")
     // rootProject = gen/android → ../../../vendor = repo root vendor/
     ?: (rootProject.projectDir.resolve("../../../vendor").canonicalPath)
 
+// SpotiFLAC Go AAR: packaged when CI sets NEKOBEAT_ENABLE_GOBACKEND=1 and AAR exists.
+// Loaded only in process :spotiflac (SpotiFlacService) — never in main UI process.
+val gobackendAarFile = file("libs/gobackend.aar")
+val enableGobackend =
+    System.getenv("NEKOBEAT_ENABLE_GOBACKEND") == "1" && gobackendAarFile.exists()
+
 android {
     compileSdk = 36
     namespace = "com.nishal21.nekobeat"
@@ -31,6 +37,7 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        buildConfigField("boolean", "HAS_GOBACKEND", if (enableGobackend) "true" else "false")
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -118,13 +125,17 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
-    // SpotiFLAC-Mobile go_backend (gomobile). Built by scripts/build-gobackend-aar.sh in CI.
-    val gobackendAar = file("libs/gobackend.aar")
-    if (gobackendAar.exists()) {
-        implementation(files(gobackendAar))
+    // SpotiFLAC-Mobile go_backend — isolated in :spotiflac via SpotiFlacService.
+    if (enableGobackend) {
+        implementation(files(gobackendAarFile))
+        logger.lifecycle("gobackend.aar packaged (HAS_GOBACKEND=true, process=:spotiflac)")
+    } else if (gobackendAarFile.exists()) {
+        logger.warn(
+            "gobackend.aar present but NOT packaged — set NEKOBEAT_ENABLE_GOBACKEND=1 (loads in :spotiflac only)",
+        )
     } else {
         logger.warn(
-            "gobackend.aar missing at ${gobackendAar.path} — Android Spotify HiFi via AAR disabled until scripts/build-gobackend-aar.sh runs",
+            "gobackend.aar missing at ${gobackendAarFile.path} — Android Spotify HiFi via AAR disabled",
         )
     }
     testImplementation("junit:junit:4.13.2")

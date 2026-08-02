@@ -6,12 +6,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Thin wrapper over SpotiFLAC-Mobile gomobile AAR (`gobackend.Gobackend`).
- * Called from Rust via JNI. Built-in providers are retired — extensions required.
+ *
+ * **Only call from [SpotiFlacService] (`:spotiflac` process).** Loading
+ * Gobackend / libgojni in the main Tauri process crashes splash.
+ * Main process uses [SpotiFlacClient] → Messenger → this class.
+ *
+ * Built-in providers are retired — extensions required.
  */
 object SpotiFlacMobile {
   private const val TAG = "SpotiFlacMobile"
   private val ready = AtomicBoolean(false)
   private var lastInitError: String? = "not initialized"
+  @Volatile private var lastBootstrapJson: String? = null
 
   @JvmStatic
   fun isAvailable(): Boolean {
@@ -25,6 +31,20 @@ object SpotiFlacMobile {
 
   @JvmStatic
   fun lastError(): String = lastInitError ?: ""
+
+  /** Status JSON for Settings / Rust — safe only inside `:spotiflac`. */
+  @JvmStatic
+  fun statusJson(filesDirPath: String): String {
+    val packaged = isAvailable()
+    val bootstrapped = try {
+      java.io.File(filesDirPath, "spotiflac_data/.nekobeat_ext_bootstrapped").exists()
+    } catch (_: Throwable) {
+      false
+    }
+    val err = lastInitError
+    val errJson = if (err == null) "null" else jsonString(err)
+    return """{"ok":true,"available":$packaged,"packaged":$packaged,"ready":${ready.get()},"bootstrapped":$bootstrapped,"process":"spotiflac","platform":"android","lastError":$errJson,"lastBootstrap":${lastBootstrapJson ?: "null"}}"""
+  }
 
   @JvmStatic
   fun ensureInitialized(filesDirPath: String): String {
@@ -131,10 +151,15 @@ object SpotiFlacMobile {
         marker.parentFile?.mkdirs()
         marker.writeText(installed.joinToString(","))
       }
-      """{"ok":true,"installed":${installed.joinToString(prefix="[", postfix="]") { jsonString(it) }},"errors":${errors.joinToString(prefix="[", postfix="]") { jsonString(it) }}}"""
+      val json =
+        """{"ok":true,"installed":${installed.joinToString(prefix="[", postfix="]") { jsonString(it) }},"errors":${errors.joinToString(prefix="[", postfix="]") { jsonString(it) }}}"""
+      lastBootstrapJson = json
+      json
     } catch (t: Throwable) {
       Log.e(TAG, "bootstrap failed", t)
-      """{"ok":false,"error":${jsonString(t.message ?: t.toString())}}"""
+      val json = """{"ok":false,"error":${jsonString(t.message ?: t.toString())}}"""
+      lastBootstrapJson = json
+      json
     }
   }
 

@@ -12,7 +12,11 @@ Requires Go ≥ version in `go_backend/go.mod`, `ANDROID_NDK_HOME`, `CGO_ENABLED
 # from nekobeat/
 bash scripts/build-gobackend-aar.sh
 # → src-tauri/gen/android/app/libs/gobackend.aar
+NEKOBEAT_ENABLE_GOBACKEND=1 npm run tauri:android:build
 ```
+
+CI sets `NEKOBEAT_ENABLE_GOBACKEND=1`. The AAR loads only in process `:spotiflac`
+(`SpotiFlacService`); the main Tauri/GStreamer process never loads `libgojni`.
 
 ## Re-sync
 

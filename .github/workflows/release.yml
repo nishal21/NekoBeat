@@ -371,11 +371,14 @@ jobs:
           go-version: '1.26.5'
 
       - name: Build SpotiFLAC-Mobile gobackend.aar (gomobile)
+        NEKOBEAT_ENABLE_GOBACKEND=1
+        # Packaged into APK when NEKOBEAT_ENABLE_GOBACKEND=1 (loads only in :spotiflac).
         run: |
           set -euo pipefail
           chmod +x scripts/build-gobackend-aar.sh
           bash scripts/build-gobackend-aar.sh
           test -f src-tauri/gen/android/app/libs/gobackend.aar
+          echo "Built gobackend.aar"
 
       - name: Build SpotiFLAC Android sidecars
         run: bash scripts/build-spotiflac-android.sh
@@ -409,6 +412,8 @@ jobs:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
           PKG_CONFIG_SYSROOT_DIR: ''
           PKG_CONFIG_PATH: ''
+          # Ship Go AAR; runtime load only in process :spotiflac (crash isolation).
+          NEKOBEAT_ENABLE_GOBACKEND: '1'
         run: npm run tauri:android:build
 
       - name: Verify APK is signed (not *-unsigned)
