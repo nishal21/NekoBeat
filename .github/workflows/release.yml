@@ -39,7 +39,91 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One draft release first so every platform uploads to the same tag/page.
+  prepare-release:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      release_id: ${{ steps.meta.outputs.release_id }}
+      version: ${{ steps.meta.outputs.version }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      draft: ${{ steps.meta.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create or reuse single GitHub Release
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          # Boolean footgun: `x && draft || true` always becomes true when draft=false
+          WANT_DRAFT: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c "import json; print(json.load(open('package.json'))['version'])")"
+          if [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF_NAME"
+          else
+            TAG="app-v${VERSION}"
+          fi
+          RELEASE_NAME="NekoBeat v${VERSION}"
+          if [ "${WANT_DRAFT}" = "true" ]; then
+            DRAFT=true
+          else
+            DRAFT=false
+          fi
+
+          BODY="$(cat <<'EOF'
+## NekoBeat
+
+### Desktop
+Full app: Browse, Listen, Library, streaming (YouTube / SoundCloud / Spotify), EQ, lyrics, updater.
+
+| Platform | Artifacts |
+|----------|-----------|
+| Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
+| Linux | `.deb` / `.AppImage` |
+| macOS | `.dmg` (Apple Silicon + Intel) |
+
+### Android (library preview)
+APK: `NekoBeat-*-android-*.apk`
+
+This build is for **music already on your phone** — Library scan/play, offline Liked files, Settings, EQ.
+Search and online streaming are **off** until they work as well as desktop.
+
+Uninstall any older APK before installing.
+EOF
+)"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Reusing existing release tag=$TAG"
+            if [ "$DRAFT" = "true" ]; then
+              gh release edit "$TAG" --title "$RELEASE_NAME" --notes "$BODY" --draft
+            else
+              gh release edit "$TAG" --title "$RELEASE_NAME" --notes "$BODY" --draft=false
+            fi
+          else
+            echo "Creating release tag=$TAG draft=$DRAFT"
+            if [ "$DRAFT" = "true" ]; then
+              gh release create "$TAG" --title "$RELEASE_NAME" --notes "$BODY" --draft
+            else
+              gh release create "$TAG" --title "$RELEASE_NAME" --notes "$BODY"
+            fi
+          fi
+
+          RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "draft=${DRAFT}" >> "$GITHUB_OUTPUT"
+          echo "Prepared release id=${RELEASE_ID} tag=${TAG} name=${RELEASE_NAME}"
+
   publish-desktop:
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
@@ -260,41 +344,30 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # TAURI_SIGNING_* already injected via GITHUB_ENV (password omitted when unset)
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
-          releaseName: "NekoBeat ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}"
-          releaseBody: |
-            ## NekoBeat
-
-            ### Desktop
-            Full app: Browse, Listen, Library, streaming (YouTube / SoundCloud / Spotify), EQ, lyrics, updater.
-
-            | Platform | Artifacts |
-            |----------|-----------|
-            | Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
-            | Linux | `.deb` / `.AppImage` |
-            | macOS | `.dmg` (Apple Silicon + Intel) |
-
-            ### Android (library preview)
-            APK: `NekoBeat-*-android-*.apk`
-
-            This build is for **music already on your phone** — Library scan/play, offline Liked files, Settings, EQ.
-            Search and online streaming are **off** until they work as well as desktop.
-
-            Uninstall any older APK before installing.
-          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
+          # Pin every matrix OS to the same release page
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
+          tagName: ${{ needs.prepare-release.outputs.tag }}
+          releaseName: ${{ needs.prepare-release.outputs.release_name }}
+          releaseDraft: ${{ needs.prepare-release.outputs.draft == 'true' }}
           prerelease: false
+          # Upload to uploads.github.com often flakes on large GStreamer bundles
+          retryAttempts: 5
+          uploadWorkflowArtifacts: true
           args: ${{ matrix.args }}
 
   publish-android:
-    # Attach after desktop so the shared GitHub Release tag already exists.
+    # Attach APK to the same release as desktop (never create a second page).
     # always() so one failed desktop platform does not skip the APK.
     if: |
       always() &&
       !cancelled() &&
+      needs.prepare-release.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || inputs.build_android)
     runs-on: ubuntu-22.04
     continue-on-error: true
-    needs: publish-desktop
+    needs:
+      - prepare-release
+      - publish-desktop
 
     steps:
       - name: Checkout
@@ -445,13 +518,8 @@ jobs:
         id: stage_apk
         run: |
           set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${{ github.ref_name }}"
-          else
-            # Match tauri-action tagName: app-v__VERSION__
-            TAG="app-v${VERSION}"
-          fi
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+          TAG="${{ needs.prepare-release.outputs.tag }}"
           mkdir -p release
           mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk -name '*-release*.apk' -type f ! -name '*unsigned*' | sort)
           if [[ ${#APKS[@]} -eq 0 ]]; then
@@ -484,19 +552,20 @@ jobs:
           path: release/*.apk
           if-no-files-found: error
 
-      - name: Attach APK to GitHub Release (with desktop installers)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.stage_apk.outputs.tag }}
-          name: NekoBeat v${{ steps.stage_apk.outputs.version }}
-          body: |
-            ## Android APK (library preview)
-
-            Local Library / Liked offline files / Settings / EQ only.
-            Search and streaming are off until they work on phones — see `docs/ANDROID_RELEASE_NOTES.md`.
-            Uninstall older APKs before installing.
-          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
-          files: release/*.apk
-          fail_on_unmatched_files: true
+      - name: Attach APK to the same GitHub Release (no new page, keep notes)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Upload only — do not edit title/body (softprops was overwriting desktop notes)
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" release/*.apk --clobber; then
+              echo "APK attached to release $TAG"
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed; retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::Failed to attach APK to release $TAG after retries"
+          exit 1
