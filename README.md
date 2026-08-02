@@ -153,6 +153,17 @@ npm install
 npm run tauri dev
 ```
 
+
+
+### Build a release
+
+```powershell
+# Signed Windows installer
+.\scripts\build-release.ps1
+```
+
+That produces signed `.exe` and `.msi` installers plus `.sig` files for the auto-updater.
+
 ## Project structure
 
 ```
