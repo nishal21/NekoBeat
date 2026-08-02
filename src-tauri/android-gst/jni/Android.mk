@@ -39,16 +39,21 @@ export PKG_CONFIG_LIBDIR := $(GSTREAMER_ROOT)/lib/pkgconfig
 GSTREAMER_NDK_BUILD_PATH := $(GSTREAMER_ROOT)/share/gst-android/ndk-build
 include $(GSTREAMER_NDK_BUILD_PATH)/plugins.mk
 
-# Local files need demux+decode: MP3 (mpg123), AAC/M4A (faad/androidmedia/libav),
-# FLAC/OGG/Opus/WAV, plus opensles sink. CODECS_RESTRICTED pulls faad+mpg123+libav.
+# Explicit plugin list — do NOT use full $(GSTREAMER_PLUGINS_CODECS) /
+# $(GSTREAMER_PLUGINS_CODECS_RESTRICTED) / NET / SYS macros: those pull
+# lcevcdecoder / webrtc / rust cloud plugins and break the NDK link line
+# (clang++ sees bare `c++` `m` `log` `lcevc_dec_*` instead of -l…).
+#
+# Audio decode coverage for local + YT cache:
+#   MP3 → mpg123 | AAC/M4A → androidmedia + libav | FLAC/OGG/Opus/WAV | opensles sink
 GSTREAMER_PLUGINS := \
-  $(GSTREAMER_PLUGINS_CORE) \
-  $(GSTREAMER_PLUGINS_PLAYBACK) \
-  $(GSTREAMER_PLUGINS_CODECS) \
-  $(GSTREAMER_PLUGINS_CODECS_RESTRICTED) \
-  $(GSTREAMER_PLUGINS_NET) \
-  $(GSTREAMER_PLUGINS_SYS) \
-  equalizer
+  coreelements playback typefindfunctions \
+  audioconvert audioresample volume autodetect \
+  opensles soup hls equalizer \
+  ogg vorbis opus flac mpg123 isomp4 matroska \
+  icydemux id3demux wavparse audioparsers auparse \
+  androidmedia libav \
+  tcp udp
 
 G_IO_MODULES := openssl
 GSTREAMER_EXTRA_DEPS := gstreamer-audio-1.0
