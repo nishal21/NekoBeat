@@ -17,6 +17,8 @@ pub struct TrackData {
     pub duration_ms: u64,
     pub source: Option<String>,
     pub local_lyrics: Option<String>,
+    #[serde(default)]
+    pub artwork_url: Option<String>,
 }
 
 /// Library DB lives in app data — NEVER under src-tauri/, or tauri:dev rebuilds
@@ -71,6 +73,7 @@ pub fn init_db(app: &tauri::AppHandle) -> SqlResult<Connection> {
 
     // Migration: Add local_lyrics column if it doesn't exist (for existing databases)
     let _ = conn.execute("ALTER TABLE tracks ADD COLUMN local_lyrics TEXT", []);
+    let _ = conn.execute("ALTER TABLE tracks ADD COLUMN artwork_url TEXT", []);
 
     Ok(conn)
 }
@@ -86,30 +89,22 @@ pub async fn scan_directory(app: tauri::AppHandle, path: String) -> Result<Vec<T
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str == "mp3" || ext_str == "flac" || ext_str == "m4a" || ext_str == "wav" {
                 if let Ok(mut track) = extract_metadata(path) {
-                    // Check if we already have this track and its lyrics
+                    // Keep prior lyrics / cover if we already enriched this path
                     let mut stmt = conn
-                        .prepare("SELECT local_lyrics FROM tracks WHERE filepath = ?1")
+                        .prepare(
+                            "SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1",
+                        )
                         .map_err(|e| e.to_string())?;
-                    let existing_lyrics: Option<String> = stmt
-                        .query_row(params![track.filepath], |row| row.get(0))
-                        .ok();
-                    track.local_lyrics = existing_lyrics;
+                    if let Ok((lyrics, art)) =
+                        stmt.query_row(params![track.filepath], |row| {
+                            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+                        })
+                    {
+                        track.local_lyrics = lyrics;
+                        track.artwork_url = art;
+                    }
 
-                    // Insert or update DB entry with fresh metadata
-                    let _ = conn.execute(
-                        "INSERT INTO tracks (filepath, title, artist, album, duration_ms, local_lyrics)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                         ON CONFLICT(filepath) DO UPDATE SET title=?2, artist=?3, album=?4, duration_ms=?5",
-                        params![
-                            track.filepath,
-                            track.title,
-                            track.artist,
-                            track.album,
-                            track.duration_ms as i64,
-                            track.local_lyrics
-                        ],
-                    );
-
+                    upsert_track(&conn, &track);
                     tracks.push(track);
                 }
             }
@@ -175,6 +170,7 @@ fn extract_metadata(path: &Path) -> Result<TrackData, String> {
         duration_ms,
         source: Some("local".to_string()),
         local_lyrics: None,
+        artwork_url: None,
     })
 }
 
@@ -182,7 +178,9 @@ fn extract_metadata(path: &Path) -> Result<TrackData, String> {
 pub fn get_cached_tracks(app: tauri::AppHandle) -> Result<Vec<TrackData>, String> {
     let conn = init_db(&app).map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT filepath, title, artist, album, duration_ms, local_lyrics FROM tracks")
+        .prepare(
+            "SELECT filepath, title, artist, album, duration_ms, local_lyrics, artwork_url FROM tracks",
+        )
         .map_err(|e| e.to_string())?;
 
     let track_iter = stmt
@@ -206,6 +204,7 @@ pub fn get_cached_tracks(app: tauri::AppHandle) -> Result<Vec<TrackData>, String
                 duration_ms: row.get::<usize, i64>(4)? as u64,
                 source: Some("local".to_string()),
                 local_lyrics: row.get(5)?,
+                artwork_url: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -244,18 +243,55 @@ fn is_audio_ext(path: &Path) -> bool {
 
 fn upsert_track(conn: &Connection, track: &TrackData) {
     let _ = conn.execute(
-        "INSERT INTO tracks (filepath, title, artist, album, duration_ms, local_lyrics)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(filepath) DO UPDATE SET title=?2, artist=?3, album=?4, duration_ms=?5",
+        "INSERT INTO tracks (filepath, title, artist, album, duration_ms, local_lyrics, artwork_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(filepath) DO UPDATE SET
+           title=?2, artist=?3, album=?4, duration_ms=?5,
+           local_lyrics=COALESCE(excluded.local_lyrics, tracks.local_lyrics),
+           artwork_url=COALESCE(excluded.artwork_url, tracks.artwork_url)",
         params![
             track.filepath,
             track.title,
             track.artist,
             track.album,
             track.duration_ms as i64,
-            track.local_lyrics
+            track.local_lyrics,
+            track.artwork_url,
         ],
     );
+}
+
+/// Save fetched cover / lyrics for a library row (title+artist enrichment).
+#[tauri::command]
+pub fn update_library_enrichment(
+    app: tauri::AppHandle,
+    filepath: String,
+    artwork_url: Option<String>,
+    local_lyrics: Option<String>,
+) -> Result<(), String> {
+    if filepath.trim().is_empty() {
+        return Err("empty filepath".into());
+    }
+    let conn = init_db(&app).map_err(|e| e.to_string())?;
+    if let Some(ref url) = artwork_url {
+        if !url.trim().is_empty() {
+            conn.execute(
+                "UPDATE tracks SET artwork_url = ?1 WHERE filepath = ?2",
+                params![url, filepath],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(ref lyrics) = local_lyrics {
+        if !lyrics.trim().is_empty() {
+            conn.execute(
+                "UPDATE tracks SET local_lyrics = ?1 WHERE filepath = ?2",
+                params![lyrics, filepath],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// Import individual audio files (mobile file picker — no folder walk).
@@ -278,11 +314,18 @@ pub async fn import_audio_files(
         match extract_metadata(&path) {
             Ok(mut track) => {
                 let mut stmt = conn
-                    .prepare("SELECT local_lyrics FROM tracks WHERE filepath = ?1")
+                    .prepare(
+                        "SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1",
+                    )
                     .map_err(|e| e.to_string())?;
-                track.local_lyrics = stmt
-                    .query_row(params![track.filepath], |row| row.get(0))
-                    .ok();
+                if let Ok((lyrics, art)) =
+                    stmt.query_row(params![track.filepath], |row| {
+                        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+                    })
+                {
+                    track.local_lyrics = lyrics;
+                    track.artwork_url = art;
+                }
                 upsert_track(&conn, &track);
                 tracks.push(track);
             }
@@ -355,11 +398,18 @@ pub async fn scan_device_music(app: tauri::AppHandle) -> Result<Vec<TrackData>, 
             }
             if let Ok(mut track) = extract_metadata(path) {
                 let mut stmt = conn
-                    .prepare("SELECT local_lyrics FROM tracks WHERE filepath = ?1")
+                    .prepare(
+                        "SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1",
+                    )
                     .map_err(|e| e.to_string())?;
-                track.local_lyrics = stmt
-                    .query_row(params![track.filepath], |row| row.get(0))
-                    .ok();
+                if let Ok((lyrics, art)) =
+                    stmt.query_row(params![track.filepath], |row| {
+                        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+                    })
+                {
+                    track.local_lyrics = lyrics;
+                    track.artwork_url = art;
+                }
                 upsert_track(&conn, &track);
                 tracks.push(track);
             }

@@ -108,6 +108,7 @@ pub fn run() {
             library::runtime_platform,
             library::get_cached_tracks,
             library::clear_library,
+            library::update_library_enrichment,
             offline::toggle_like,
             offline::get_liked_tracks,
             news::get_music_news,

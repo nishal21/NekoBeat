@@ -265,16 +265,22 @@ jobs:
           releaseBody: |
             ## NekoBeat
 
-            Installers for this version:
+            ### Desktop
+            Full app: Browse, Listen, Library, streaming (YouTube / SoundCloud / Spotify), EQ, lyrics, updater.
 
             | Platform | Artifacts |
             |----------|-----------|
             | Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
             | Linux | `.deb` / `.AppImage` |
             | macOS | `.dmg` (Apple Silicon + Intel) |
-            | Android | `.apk` (same GitHub Release — `NekoBeat-*-android-*.apk`) |
 
-            See the README for install notes.
+            ### Android (library preview)
+            APK: `NekoBeat-*-android-*.apk`
+
+            This build is for **music already on your phone** — Library scan/play, offline Liked files, Settings, EQ.
+            Search and online streaming are **off** until they work as well as desktop.
+
+            Uninstall any older APK before installing.
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
           prerelease: false
           args: ${{ matrix.args }}
@@ -483,6 +489,12 @@ jobs:
         with:
           tag_name: ${{ steps.stage_apk.outputs.tag }}
           name: NekoBeat v${{ steps.stage_apk.outputs.version }}
+          body: |
+            ## Android APK (library preview)
+
+            Local Library / Liked offline files / Settings / EQ only.
+            Search and streaming are off until they work on phones — see `docs/ANDROID_RELEASE_NOTES.md`.
+            Uninstall older APKs before installing.
           draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
           files: release/*.apk
           fail_on_unmatched_files: true

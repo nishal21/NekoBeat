@@ -1085,6 +1085,29 @@ export function useLibrary() {
         }
     };
 
+    /** Merge cover / lyrics onto a library row (memory + SQLite). */
+    const patchTrack = (
+        filepath: string,
+        patch: { artwork_url?: string; local_lyrics?: string },
+    ) => {
+        setTracks((prev) =>
+            prev.map((t) =>
+                t.filepath === filepath
+                    ? {
+                        ...t,
+                        artwork_url: patch.artwork_url ?? t.artwork_url,
+                        local_lyrics: patch.local_lyrics ?? t.local_lyrics,
+                    }
+                    : t,
+            ),
+        );
+        invoke('update_library_enrichment', {
+            filepath,
+            artworkUrl: patch.artwork_url ?? null,
+            localLyrics: patch.local_lyrics ?? null,
+        }).catch((e) => console.warn('Library enrichment save failed', e));
+    };
+
     useEffect(() => {
         loadCachedTracks();
     }, []);
@@ -1096,7 +1119,8 @@ export function useLibrary() {
         importAudioFiles,
         scanDeviceMusic,
         clearLibrary,
-        loadCachedTracks
+        loadCachedTracks,
+        patchTrack,
     };
 }
 
@@ -1231,8 +1255,11 @@ export function useEqualizer() {
         });
     };
 
-    // Apply all gains on init (if needed, or when GStreamer resets)
+    // Apply EQ on init — skip on Android (library preview; EQ IPC was a Settings crash source)
     useEffect(() => {
+        if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')) {
+            return;
+        }
         gains.forEach((gain, index) => {
             if (gain !== 0) {
                 const clamped = Math.max(-24, Math.min(12, gain));

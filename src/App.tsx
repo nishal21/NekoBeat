@@ -10,7 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
 import logoImg from "./assets/logo.png";
 import { UpdateNotification, UpdateSettingsCard } from "./UpdateToast";
-import { SpotiFlacHifiCard } from "./SpotiFlacHifiCard";
+import { AndroidScopeBanner, AndroidScopeSettingsCard } from "./AndroidScopeNote";
 import type { AvailableUpdate } from "./updates";
 
 type RecentPlay = {
@@ -874,7 +874,7 @@ function App() {
     return saved ? JSON.parse(saved) : false;
   });
 
-  const { tracks, isScanning, scanDirectory, importAudioFiles, scanDeviceMusic, clearLibrary } = useLibrary();
+  const { tracks, isScanning, scanDirectory, importAudioFiles, scanDeviceMusic, clearLibrary, patchTrack } = useLibrary();
   const [isMobileOs, setIsMobileOs] = useState(false);
   const [isAndroidOs, setIsAndroidOs] = useState(false);
   const { results: searchResults, isLoading: isSearching, isLoadingMore, hasMore, search: performSearch, loadMore, sourceErrors, error: searchError } = useAggregatorSearch();
@@ -1384,6 +1384,17 @@ function App() {
       } catch (e) {
         console.error("Failed to play local liked track, falling back to stream:", e);
         if (requestId !== playRequestRef.current) return;
+        if (isAndroidOs) {
+          setStreamError({
+            message:
+              'That offline file is missing. Re-scan Library or like the track again from desktop once streaming returns on Android.',
+            trackTitle: track.title,
+            trackArtist: track.artist,
+            source: track.source,
+          });
+          setTimeout(() => setStreamError(null), 10000);
+          return;
+        }
         setStreamError({
           message: `Offline file missing for "${track.title}". Re-download from Liked or stream again.`,
           trackTitle: track.title,
@@ -1391,6 +1402,19 @@ function App() {
           source: track.source,
         });
       }
+    }
+
+    // Android preview: no online resolve (yt-dlp / Piped were failing on device).
+    if (isAndroidOs) {
+      setStreamError({
+        message:
+          'Online streaming is off in this Android build. Open Library, scan your music, and play files on the phone. Search and streaming will come back later.',
+        trackTitle: track.title,
+        trackArtist: track.artist,
+        source: track.source,
+      });
+      setTimeout(() => setStreamError(null), 10000);
+      return;
     }
 
     // Reconstruct a proper source URL from the track ID if stream_url is missing or stale
@@ -1630,7 +1654,13 @@ function App() {
       // Only hit iTunes when artwork is missing / placeholder (skip when we have offline art)
       if (!hasArt) {
         fetchAlbumArt(playerTrack.title, playerTrack.artist).then(url => {
-          if (!stale && url) setCoverArt(url);
+          if (!stale && url) {
+            setCoverArt(url);
+            const fp = playerTrack.filepath;
+            if (fp && (!playerTrack.source || playerTrack.source === 'local')) {
+              patchTrack(fp, { artwork_url: url });
+            }
+          }
         });
       }
 
@@ -1678,9 +1708,17 @@ function App() {
           } else {
             setParsedLyrics([]);
           }
-          // Persist lyrics onto liked registry for next offline play
           const text = data?.syncedLyrics || data?.plainLyrics;
-          if (text && ((playerTrack as any).playbackContext === 'liked' || likedTracks.some(t => t.id === playerTrack.id))) {
+          if (!text) return;
+          const fp = playerTrack.filepath;
+          if (fp && (!playerTrack.source || playerTrack.source === 'local')) {
+            patchTrack(fp, { local_lyrics: text });
+            invoke('update_track_lyrics', {
+              trackId: fp,
+              filepath: fp,
+              lyrics: text,
+            }).catch(() => { /* non-fatal */ });
+          } else if ((playerTrack as any).playbackContext === 'liked' || likedTracks.some(t => t.id === playerTrack.id)) {
             invoke('update_track_lyrics', {
               trackId: playerTrack.id,
               filepath: null,
@@ -1695,7 +1733,7 @@ function App() {
       setParsedLyrics([]);
     }
     return () => { stale = true; };
-  }, [playerTrack?.id, playerTrack?.filepath, currentTrackPath]);
+  }, [playerTrack?.id, playerTrack?.filepath, currentTrackPath, patchTrack]);
 
   // MediaSession action handlers — bind once; always call latest via refs.
   // Critical: MediaPlayPause also hits the global shortcut; resume guard + explicit
@@ -1879,6 +1917,11 @@ function App() {
   const searchArtist = (artist: string) => {
     const q = (artist || '').trim();
     if (!q) return;
+    if (isAndroidOs) {
+      setIsExpanded(false);
+      setActiveTab('library');
+      return;
+    }
     setPendingAutoplayQuery(null);
     setSearchQuery(q);
     setSearchSource('all');
@@ -1894,12 +1937,19 @@ function App() {
         if (!cancelled) {
           setIsMobileOs(plat === 'android' || plat === 'ios');
           setIsAndroidOs(plat === 'android');
+          if (plat === 'android') {
+            setActiveTab((t) => (t === 'browse' || t === 'listen' ? 'library' : t));
+          }
         }
       } catch {
         const ua = navigator.userAgent || '';
         if (!cancelled) {
+          const android = /Android/i.test(ua);
           setIsMobileOs(/Android|iPhone|iPad/i.test(ua));
-          setIsAndroidOs(/Android/i.test(ua));
+          setIsAndroidOs(android);
+          if (android) {
+            setActiveTab((t) => (t === 'browse' || t === 'listen' ? 'library' : t));
+          }
         }
       }
     })();
@@ -2072,9 +2122,10 @@ function App() {
 
   return (
     <div className="flex flex-col md:flex-row h-screen w-full bg-[var(--color-surface-base)] text-white overflow-hidden font-sans select-none relative main-container">
+      {(!isAndroidOs || updateCheckNonce > 0) && (
       <UpdateNotification
         checkNonce={updateCheckNonce}
-        force={updateForce}
+        force={updateForce || isAndroidOs}
         onStatus={(s) => {
           setUpdateChecking(s.checking);
           if (s.current) setAppVersion(s.current);
@@ -2083,6 +2134,7 @@ function App() {
           if (!s.checking) setUpdateUpToDate(!!s.upToDate && !s.update);
         }}
       />
+      )}
       {/* Stream Error / Preview Toast */}
       <AnimatePresence>
         {streamError && (
@@ -2106,6 +2158,7 @@ function App() {
                 </h4>
                 <p className="text-xs text-neutral-400 mt-1 leading-relaxed">{streamError.message}</p>
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  {!isAndroidOs && (
                   <button
                     onClick={() => {
                       const q = `${streamError.trackTitle || ''} ${streamError.trackArtist || ''}`.trim();
@@ -2122,6 +2175,18 @@ function App() {
                     <Search size={12} />
                     Search on YouTube
                   </button>
+                  )}
+                  {isAndroidOs && (
+                  <button
+                    onClick={() => {
+                      setActiveTab('library');
+                      setStreamError(null);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all bg-[var(--color-neon-yellow)]/20 text-[var(--color-neon-yellow)]"
+                  >
+                    Open Library
+                  </button>
+                  )}
                   <button
                     onClick={() => setStreamError(null)}
                     className="text-neutral-500 hover:text-white text-xs font-medium px-2 py-1"
@@ -2166,10 +2231,17 @@ function App() {
         </div>
 
         <nav className="flex flex-row md:flex-col gap-1 md:gap-2 w-full justify-around md:justify-start">
-          <NavItem icon={<Home size={22} />} label="Listen" active={activeTab === 'listen'} onClick={() => setActiveTab('listen')} />
-          <NavItem icon={<Search size={22} />} label="Browse" active={activeTab === 'browse'} onClick={() => setActiveTab('browse')} />
+          {!isAndroidOs && (
+            <>
+              <NavItem icon={<Home size={22} />} label="Listen" active={activeTab === 'listen'} onClick={() => setActiveTab('listen')} />
+              <NavItem icon={<Search size={22} />} label="Browse" active={activeTab === 'browse'} onClick={() => setActiveTab('browse')} />
+            </>
+          )}
           <NavItem icon={<Library size={22} />} label="Library" active={activeTab === 'library'} onClick={() => setActiveTab('library')} />
           <NavItem icon={<Heart size={22} />} label="Liked Songs" active={activeTab === 'liked'} onClick={() => setActiveTab('liked')} />
+          {isAndroidOs && (
+            <NavItem icon={<Settings size={22} />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          )}
         </nav>
       </motion.aside>
 
@@ -2184,6 +2256,7 @@ function App() {
               exit={{ y: -20, opacity: 0 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
             >
+              {isAndroidOs && <AndroidScopeBanner />}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-6 md:mb-8">
                 <h1 className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tighter leading-none">Your Library</h1>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2266,6 +2339,8 @@ function App() {
                       title={track.title}
                       artist={track.artist}
                       artworkUrl={track.artwork_url}
+                      source={track.source || 'local'}
+                      onArtResolved={(url) => patchTrack(track.filepath, { artwork_url: url })}
                       onClick={() => (!track.source || track.source === 'local') ? handlePlayLocalTrack(track.filepath) : handleStreamExternalAudio(track)}
                       isPlaying={currentTrackPath === track.filepath && isPlaying}
                     />
@@ -2311,13 +2386,17 @@ function App() {
                 <div className="py-20 px-6 text-center max-w-md mx-auto space-y-4">
                   <Heart size={48} className="mx-auto mb-2 text-[var(--color-neon-yellow)]/70" />
                   <h2 className="text-xl font-display font-black text-white tracking-tight">No liked songs yet</h2>
-                  <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">Tap the heart on any track while it plays — liked songs show up here for quick replay.</p>
+                  <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">
+                    {isAndroidOs
+                      ? 'Hearts on offline Library tracks show up here. Online likes from desktop stream elsewhere for now.'
+                      : 'Tap the heart on any track while it plays — liked songs show up here for quick replay.'}
+                  </p>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('browse')}
+                    onClick={() => setActiveTab(isAndroidOs ? 'library' : 'browse')}
                     className="inline-flex px-5 py-2.5 rounded-xl bg-[var(--color-neon-yellow)] text-black font-black text-sm uppercase tracking-wider"
                   >
-                    Find music to like
+                    {isAndroidOs ? 'Open Library' : 'Find music to like'}
                   </button>
                 </div>
               ) : viewMode === 'grid' ? (
@@ -2528,10 +2607,16 @@ function App() {
                 <p className="section-kicker">Preferences</p>
                 <h2 className="text-2xl sm:text-3xl font-display font-black text-white tracking-tight">Settings</h2>
                 <p className="text-sm text-[var(--color-ink-muted)] max-w-xl">
-                  Sources, sound, and playback — tuned for phone, tablet, and desktop.
+                  {isAndroidOs
+                    ? 'EQ and library tools for music already on this phone.'
+                    : 'Sources, sound, and playback — tuned for phone, tablet, and desktop.'}
                 </p>
               </header>
 
+              {isAndroidOs && <AndroidScopeSettingsCard />}
+
+              {!isAndroidOs && (
+              <>
               <section className="settings-card space-y-4">
                 <div>
                   <h3 className="text-base sm:text-lg font-display font-bold text-white">New releases region</h3>
@@ -2586,7 +2671,10 @@ function App() {
                   ))}
                 </div>
               </section>
+              </>
+              )}
 
+              {/* Equalizer — available on Android too; band apply is catch-wrapped / no auto-apply on Android open */}
               <section className="settings-card">
                 <Equalizer />
               </section>
@@ -2603,8 +2691,7 @@ function App() {
                 }}
               />
 
-              <SpotiFlacHifiCard isAndroid={isAndroidOs} />
-
+              {!isAndroidOs && (
               <section className="settings-card space-y-4">
                 <div>
                   <h3 className="text-base sm:text-lg font-display font-bold text-white">Playback</h3>
@@ -2648,6 +2735,7 @@ function App() {
                   </button>
                 </div>
               </section>
+              )}
 
               <section className="settings-card space-y-4">
                 <div>
@@ -2682,6 +2770,23 @@ function App() {
                 </div>
               </section>
             </motion.div>
+          ) : activeTab === 'listen' && isAndroidOs ? (
+            <motion.div
+              key="listen-android"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -20, opacity: 0 }}
+              className="max-w-lg mx-auto py-10"
+            >
+              <AndroidScopeBanner />
+              <button
+                type="button"
+                onClick={() => setActiveTab('library')}
+                className="mt-4 w-full min-h-[48px] rounded-2xl bg-[var(--color-neon-yellow)] text-black font-black"
+              >
+                Go to Library
+              </button>
+            </motion.div>
           ) : (
             <MusicNews
               news={browseNews}
@@ -2690,10 +2795,14 @@ function App() {
               viewMode={viewMode}
               setViewMode={setViewMode}
               recentPlays={recentPlays}
-              onQuickNav={(tab) => setActiveTab(tab)}
+              onQuickNav={(tab) => setActiveTab(isAndroidOs && tab === 'browse' ? 'library' : tab)}
               onPlayRecent={(recent) => {
-                if (recent.filepath && !recent.source) {
+                if (recent.filepath && (!recent.source || recent.source === 'local')) {
                   playTrack(recent.filepath);
+                  return;
+                }
+                if (isAndroidOs) {
+                  setActiveTab('library');
                   return;
                 }
                 handleStreamExternalAudio({
@@ -2709,6 +2818,10 @@ function App() {
                 }, 'liked');
               }}
               onSelect={(track) => {
+                if (isAndroidOs) {
+                  setActiveTab('library');
+                  return;
+                }
                 const q = `${track.title} ${track.artist}`;
                 setPendingAutoplayQuery(q);
                 setSearchQuery(q);
@@ -3474,7 +3587,7 @@ function SkeletonTrack() {
   );
 }
 
-function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, source }: { index: number; title: string; artist: string; onClick: () => void; isPlaying: boolean; artworkUrl?: string; source?: string }) {
+function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, source, onArtResolved }: { index: number; title: string; artist: string; onClick: () => void; isPlaying: boolean; artworkUrl?: string; source?: string; onArtResolved?: (url: string) => void }) {
   const [imgUrl, setImgUrl] = useState(artworkUrl || placeholderArt(title));
   const failedRef = useRef(false);
 
@@ -3488,9 +3601,12 @@ function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, sourc
       setImgUrl(artworkUrl);
     }
     fetchAlbumArt(title, artist).then((url) => {
-      if (url && !failedRef.current) setImgUrl(url);
+      if (url && !failedRef.current) {
+        setImgUrl(url);
+        if (!artworkUrl || !isRealArtworkUrl(artworkUrl)) onArtResolved?.(url);
+      }
     });
-  }, [title, artist, artworkUrl]);
+  }, [title, artist, artworkUrl, onArtResolved]);
 
   return (
     <motion.div
@@ -3510,8 +3626,10 @@ function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, sourc
             if (failedRef.current) return;
             failedRef.current = true;
             fetchAlbumArt(title, artist).then((url) => {
-              if (url) setImgUrl(url);
-              else setImgUrl(placeholderArt(title));
+              if (url) {
+                setImgUrl(url);
+                onArtResolved?.(url);
+              } else setImgUrl(placeholderArt(title));
             });
           }}
         />

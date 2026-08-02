@@ -859,16 +859,20 @@ pub async fn update_track_lyrics(app: tauri::AppHandle, track_id: String, filepa
         lyrics
     };
 
-    // 1. Check if it's a local track (SQLite)
+    // 1. Local library row (SQLite) — Android content:// may not pass Path::exists
     if let Some(path) = filepath {
-        if Path::new(&path).exists() {
-            println!("Offline: Updating local track lyrics at {:?}", path);
+        if !path.trim().is_empty() {
+            println!("Offline: Updating local track lyrics for {:?}", path);
             let conn = crate::library::init_db(&app).map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE tracks SET local_lyrics = ?1 WHERE filepath = ?2",
-                rusqlite::params![processed_lyrics, path],
-            ).map_err(|e| e.to_string())?;
-            return Ok(());
+            let n = conn
+                .execute(
+                    "UPDATE tracks SET local_lyrics = ?1 WHERE filepath = ?2",
+                    rusqlite::params![processed_lyrics, path],
+                )
+                .map_err(|e| e.to_string())?;
+            if n > 0 {
+                return Ok(());
+            }
         }
     }
 
