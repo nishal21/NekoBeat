@@ -6,4 +6,5 @@ pub mod lyrics;
 pub mod musixmatch;
 pub mod spotify;
 pub mod spotify_lyrics;
+pub mod spotify_web;
 

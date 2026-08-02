@@ -72,19 +72,41 @@ async fn run_sidecar_fs(args: &[&str], timeout: Duration) -> Result<SidecarOutpu
     println!("Spotify sidecar: running {:?}", bin);
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.args(args);
-    if let Some(dir) = android_bin::bin_dir() {
-        let mut paths = vec![dir.clone()];
+    // Prefer nativeLibraryDir on PATH (exec-safe on Android)
+    let path_dirs: Vec<std::path::PathBuf> = [
+        android_bin::native_lib_dir(),
+        android_bin::bin_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !path_dirs.is_empty() {
+        let mut paths = path_dirs.clone();
         if let Some(existing) = std::env::var_os("PATH") {
             for p in std::env::split_paths(&existing) {
                 paths.push(p);
             }
         }
-        if let Ok(joined) = std::env::join_paths(paths) {
+        if let Ok(joined) = std::env::join_paths(&paths) {
             cmd.env("PATH", joined);
         }
-        cmd.env("NEKOBEAT_BIN_DIR", &dir);
-        // Help SpotiFLAC find ffmpeg next to our bin dir / home .spotiflac
-        cmd.env("HOME", dir.parent().unwrap_or(dir.as_path()));
+        if let Some(native) = android_bin::native_lib_dir() {
+            cmd.env("NEKOBEAT_NATIVE_LIB_DIR", &native);
+            let ffmpeg = native.join("libffmpeg.so");
+            let ffprobe = native.join("libffprobe.so");
+            if ffmpeg.is_file() {
+                cmd.env("NEKOBEAT_FFMPEG", ffmpeg);
+            }
+            if ffprobe.is_file() {
+                cmd.env("NEKOBEAT_FFPROBE", ffprobe);
+            }
+        }
+        if let Some(dir) = android_bin::bin_dir() {
+            cmd.env("NEKOBEAT_BIN_DIR", &dir);
+            if let Some(home) = dir.parent() {
+                cmd.env("HOME", home);
+            }
+        }
     }
     let output = process_util::run_silent_timeout(cmd, timeout).await?;
     Ok(SidecarOutput {
