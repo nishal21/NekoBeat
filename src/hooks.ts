@@ -350,6 +350,7 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
         trackId?: string,
         title?: string,
         artist?: string,
+        durationMs?: number,
     ) => {
         const epoch = ++playEpochRef.current;
         lastStreamRef.current = { url, source, trackId };
@@ -384,6 +385,7 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
                 source,
                 title: title || null,
                 artist: artist || null,
+                durationMs: durationMs && durationMs > 0 ? Math.floor(durationMs) : null,
             });
             if (epoch !== playEpochRef.current) return null;
             setCurrentTrackPath(resolvedUrl || url);
@@ -768,10 +770,12 @@ export function useAggregatorSearch() {
             if (ytResults.status === 'rejected') errs.youtube = String(ytResults.reason);
             if (scResults.status === 'rejected') errs.soundcloud = String(scResults.reason);
             if (spResults.status === 'rejected') {
-                // Always surface Spotify failures (web search / token). Soft-skip only explicit marker.
-                const reason = String(spResults.reason);
-                if (!/soft-skip/i.test(reason)) {
-                    errs.spotify = reason.replace(/^Error:\s*/i, '').slice(0, 180);
+                const reason = String(spResults.reason).replace(/^Error:\s*/i, '');
+                // Rate limits are noisy — keep YT/SC results, show a short tip
+                if (/429|rate limit/i.test(reason)) {
+                    errs.spotify = 'Spotify is rate-limited right now. Use YouTube results, or try Spotify again in a minute.';
+                } else if (!/soft-skip/i.test(reason)) {
+                    errs.spotify = reason.slice(0, 180);
                 }
             }
             setSourceErrors(errs);

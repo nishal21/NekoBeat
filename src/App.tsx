@@ -1265,6 +1265,7 @@ function App() {
         url,
         title: t.title || null,
         artist: t.artist || null,
+        durationMs: t.duration_ms && t.duration_ms > 0 ? Math.floor(t.duration_ms) : null,
       }).catch((e) => {
         console.warn('Prefetch failed:', t.title, e);
         prefetchedIdsRef.current.delete(id);
@@ -1421,6 +1422,7 @@ function App() {
       track.id,
       track.title,
       track.artist,
+      track.duration_ms,
     );
     if (requestId !== playRequestRef.current) return;
     if (resolvedUrl) {

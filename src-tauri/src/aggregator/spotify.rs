@@ -13,8 +13,9 @@ pub async fn resolve_spotify_url(
     url: &str,
     hint_title: Option<&str>,
     hint_artist: Option<&str>,
+    hint_duration_ms: Option<u64>,
 ) -> Result<String, String> {
-    resolve_spotify_url_inner(app, url, hint_title, hint_artist, false).await
+    resolve_spotify_url_inner(app, url, hint_title, hint_artist, hint_duration_ms, false).await
 }
 
 pub async fn prefetch_spotify_youtube(
@@ -22,8 +23,9 @@ pub async fn prefetch_spotify_youtube(
     url: &str,
     hint_title: Option<&str>,
     hint_artist: Option<&str>,
+    hint_duration_ms: Option<u64>,
 ) -> Result<String, String> {
-    resolve_spotify_url_inner(app, url, hint_title, hint_artist, true).await
+    resolve_spotify_url_inner(app, url, hint_title, hint_artist, hint_duration_ms, true).await
 }
 
 async fn resolve_spotify_url_inner(
@@ -31,6 +33,7 @@ async fn resolve_spotify_url_inner(
     url: &str,
     hint_title: Option<&str>,
     hint_artist: Option<&str>,
+    hint_duration_ms: Option<u64>,
     warm_cache_only: bool,
 ) -> Result<String, String> {
     println!(
@@ -42,7 +45,6 @@ async fn resolve_spotify_url_inner(
     let track_id = spotify_id_from_url(url);
 
     // 1) Cached liked / HiFi file — always prefer local when present.
-    // Likes copy the file you're hearing; downloads use title+artist so matches stay correct.
     if let Some(ref id) = track_id {
         if let Ok(Some(path)) = crate::offline::check_liked_cache(app.clone(), id.clone()).await {
             let file_uri = crate::path_util::path_to_file_uri(std::path::Path::new(&path));
@@ -81,8 +83,15 @@ async fn resolve_spotify_url_inner(
             .unwrap_or_default()
     };
 
-    // 2) Instant YouTube match
-    let mut query = format!("{} {}", artist, title).trim().to_string();
+    let clean_title = crate::aggregator::resolver::clean_spotify_query_part(&title);
+    let clean_artist = crate::aggregator::resolver::clean_spotify_query_part(
+        artist.split(',').next().unwrap_or(&artist),
+    );
+
+    // 2) Instant YouTube match — score candidates so we don't play a different song
+    let mut query = format!("{} {}", clean_artist, clean_title)
+        .trim()
+        .to_string();
     if query.is_empty() {
         if let Some(ref id) = track_id {
             let raw = id.trim_start_matches("sp-");
@@ -95,14 +104,23 @@ async fn resolve_spotify_url_inner(
         );
     }
 
-    println!("Spotify: Instant YouTube match for '{}'", query);
-    // Prefer full-song uploads over Shorts / teasers
+    println!(
+        "Spotify: Instant YouTube match for '{}' (raw '{} — {}')",
+        query, artist, title
+    );
     let yt_query = if query.to_lowercase().contains("official") {
         query.clone()
     } else {
         format!("{} official audio", query)
     };
-    let stream = crate::aggregator::resolver::resolve_youtube_search(app, &yt_query).await?;
+    let stream = crate::aggregator::resolver::resolve_youtube_search_matched(
+        app,
+        &yt_query,
+        Some(clean_title.as_str()),
+        Some(clean_artist.as_str()),
+        hint_duration_ms.filter(|&ms| ms >= 30_000),
+    )
+    .await?;
 
     // Hints mean we found the right match — overwrite liked offline file (fixes prior bad downloads)
     if hint_title.map(str::trim).filter(|s| !s.is_empty()).is_some() {

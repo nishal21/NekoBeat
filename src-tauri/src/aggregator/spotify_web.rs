@@ -160,96 +160,122 @@ pub async fn search_tracks(query: &str, limit: u32, offset: u32) -> Result<Vec<S
         offset
     );
 
-    let res = client
-        .get(&url)
-        .bearer_auth(&token)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("Spotify search request: {}", e))?;
+    let mut last_err = String::new();
+    for attempt in 0..4u32 {
+        let res = client
+            .get(&url)
+            .bearer_auth(&token)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            .send()
+            .await
+            .map_err(|e| format!("Spotify search request: {}", e))?;
 
-    if !res.status().is_success() {
         let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        return Err(format!(
-            "Spotify search HTTP {}: {}",
-            status,
-            body.chars().take(160).collect::<String>()
-        ));
-    }
-
-    let json: serde_json::Value = res
-        .json()
-        .await
-        .map_err(|e| format!("Spotify search parse: {}", e))?;
-
-    let mut out = Vec::new();
-    let items = json
-        .pointer("/tracks/items")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    for item in items {
-        let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if id.is_empty() {
+        if status.as_u16() == 429 {
+            let retry_after = res
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(1u64 + attempt as u64);
+            let wait = retry_after.clamp(1, 8);
+            last_err = format!("Spotify rate limited (HTTP 429). Retrying in {}s…", wait);
+            eprintln!("Spotify web search: {}", last_err);
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
             continue;
         }
-        let title = item
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown")
-            .to_string();
-        let artists = item
-            .get("artists")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Unknown Artist".into());
-        let album = item
-            .pointer("/album/name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let duration_ms = item
-            .get("duration_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let artwork_url = item
-            .pointer("/album/images")
-            .and_then(|v| v.as_array())
-            .and_then(|imgs| {
-                imgs.iter()
-                    .max_by_key(|img| img.get("width").and_then(|w| w.as_u64()).unwrap_or(0))
-                    .and_then(|img| img.get("url").and_then(|u| u.as_str()))
-            })
-            .unwrap_or("")
-            .to_string();
-        let external_url = item
-            .pointer("/external_urls/spotify")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("https://open.spotify.com/track/{}", id));
 
-        out.push(SpotifySearchHit {
-            id,
-            title,
-            artist: artists,
-            album,
-            duration_ms,
-            artwork_url,
-            external_url,
-        });
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            return Err(format!(
+                "Spotify search HTTP {}: {}",
+                status,
+                body.chars().take(120).collect::<String>()
+            ));
+        }
+
+        let json: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e| format!("Spotify search parse: {}", e))?;
+
+        let mut out = Vec::new();
+        let items = json
+            .pointer("/tracks/items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for item in items {
+            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if id.is_empty() {
+                continue;
+            }
+            let title = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown")
+                .to_string();
+            let artists = item
+                .get("artists")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Unknown Artist".into());
+            let album = item
+                .pointer("/album/name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let duration_ms = item
+                .get("duration_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let artwork_url = item
+                .pointer("/album/images")
+                .and_then(|v| v.as_array())
+                .and_then(|imgs| {
+                    imgs.iter()
+                        .max_by_key(|img| img.get("width").and_then(|w| w.as_u64()).unwrap_or(0))
+                        .and_then(|img| img.get("url").and_then(|u| u.as_str()))
+                })
+                .unwrap_or("")
+                .to_string();
+            let external_url = item
+                .pointer("/external_urls/spotify")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("https://open.spotify.com/track/{}", id));
+
+            out.push(SpotifySearchHit {
+                id,
+                title,
+                artist: artists,
+                album,
+                duration_ms,
+                artwork_url,
+                external_url,
+            });
+        }
+
+        println!("Spotify web search: {} tracks for '{}'", out.len(), q);
+        return Ok(out);
     }
 
-    println!("Spotify web search: {} tracks for '{}'", out.len(), q);
-    Ok(out)
+    Err(if last_err.is_empty() {
+        "Spotify search failed after retries".into()
+    } else {
+        format!(
+            "{} — wait a moment, or use YouTube / All search.",
+            last_err.replace(" Retrying in", " Tried;")
+        )
+    })
 }

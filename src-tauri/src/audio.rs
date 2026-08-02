@@ -112,10 +112,18 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
 
         playbin.set_property("audio-filter", &equalizer);
 
-        // Android: prefer OpenSLES output (GStreamer Android SDK default audio path)
+        // Android: OpenSLES sink element is openslessink (plugin name "opensles")
         #[cfg(target_os = "android")]
-        if let Ok(opensles) = gstreamer::ElementFactory::make("opensles").build() {
-            playbin.set_property("audio-sink", &opensles);
+        {
+            let sink = gstreamer::ElementFactory::make("openslessink")
+                .build()
+                .or_else(|_| gstreamer::ElementFactory::make("opensles").build());
+            if let Ok(opensles) = sink {
+                playbin.set_property("audio-sink", &opensles);
+                println!("GStreamer: using OpenSLES audio sink");
+            } else {
+                eprintln!("GStreamer: openslessink unavailable — playbin will auto-pick sink");
+            }
         }
 
         // Low preroll — start audible ASAP; soup will keep filling behind
@@ -383,10 +391,19 @@ pub async fn stream_external_audio(
     source: String,
     title: Option<String>,
     artist: Option<String>,
+    duration_ms: Option<u64>,
 ) -> Result<String, String> {
     println!("Streaming external audio from {}: {}", source, url);
     let _ = app.emit("audio-buffering", true);
-    match crate::aggregator::resolver::resolve_url(&app, &url, title.as_deref(), artist.as_deref()).await {
+    match crate::aggregator::resolver::resolve_url_with_duration(
+        &app,
+        &url,
+        title.as_deref(),
+        artist.as_deref(),
+        duration_ms,
+    )
+    .await
+    {
         Ok(resolved_url) => {
             // Stay buffering until GStreamer Buffering bus clears it
             
@@ -460,8 +477,16 @@ pub async fn prefetch_external_audio(
     url: String,
     title: Option<String>,
     artist: Option<String>,
+    duration_ms: Option<u64>,
 ) -> Result<(), String> {
-    crate::aggregator::resolver::prefetch_url(&app, &url, title.as_deref(), artist.as_deref()).await
+    crate::aggregator::resolver::prefetch_url_with_duration(
+        &app,
+        &url,
+        title.as_deref(),
+        artist.as_deref(),
+        duration_ms,
+    )
+    .await
 }
 
 #[tauri::command]

@@ -142,20 +142,28 @@ fn init_unix() {
 }
 
 /// Android: link `libgstreamer_android.so` via NDK (see docs/ANDROID_GSTREAMER.md).
-/// Plugins: playbin, souphttpsrc, hlsdemux, opensles, equalizer (bad).
 #[cfg(target_os = "android")]
 fn init_android() {
-  // Native libs are packaged in jniLibs by the GStreamer NDK build.
-  // Optional: org.freedesktop.gstreamer.GStreamer.init(context) from Kotlin if needed.
   match gstreamer::init() {
     Ok(_) => {
-      let playbin = gstreamer::ElementFactory::find("playbin").is_some();
-      let soup = gstreamer::ElementFactory::find("souphttpsrc").is_some();
-      let opensles = gstreamer::ElementFactory::find("opensles").is_some();
-      eprintln!(
-        "GStreamer Android OK (playbin={}, souphttpsrc={}, opensles={})",
-        playbin, soup, opensles
-      );
+      let probes = [
+        "playbin",
+        "openslessink",
+        "mpg123audiodec",
+        "faad",
+        "amcaudiodec",
+        "avdec_aac",
+        "flacdec",
+        "opusdec",
+        "vorbisdec",
+        "wavparse",
+        "qtdemux",
+      ];
+      let status: Vec<String> = probes
+        .iter()
+        .map(|n| format!("{}={}", n, gstreamer::ElementFactory::find(n).is_some()))
+        .collect();
+      eprintln!("GStreamer Android OK ({})", status.join(", "));
     }
     Err(e) => eprintln!(
       "GStreamer Android init failed — set GSTREAMER_ROOT_ANDROID and NDK plugins: {}",

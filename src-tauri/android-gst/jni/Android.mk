@@ -39,10 +39,16 @@ export PKG_CONFIG_LIBDIR := $(GSTREAMER_ROOT)/lib/pkgconfig
 GSTREAMER_NDK_BUILD_PATH := $(GSTREAMER_ROOT)/share/gst-android/ndk-build
 include $(GSTREAMER_NDK_BUILD_PATH)/plugins.mk
 
+# Local files need demux+decode: MP3 (mpg123), AAC/M4A (faad/androidmedia/libav),
+# FLAC/OGG/Opus/WAV, plus opensles sink. CODECS_RESTRICTED pulls faad+mpg123+libav.
 GSTREAMER_PLUGINS := \
-  coreelements playback audioconvert audioresample volume typefindfunctions \
-  opensles soup hls equalizer \
-  ogg vorbis opus flac mpg123 isomp4 matroska icydemux id3demux tcp udp
+  $(GSTREAMER_PLUGINS_CORE) \
+  $(GSTREAMER_PLUGINS_PLAYBACK) \
+  $(GSTREAMER_PLUGINS_CODECS) \
+  $(GSTREAMER_PLUGINS_CODECS_RESTRICTED) \
+  $(GSTREAMER_PLUGINS_NET) \
+  $(GSTREAMER_PLUGINS_SYS) \
+  equalizer
 
 G_IO_MODULES := openssl
 GSTREAMER_EXTRA_DEPS := gstreamer-audio-1.0
