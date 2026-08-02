@@ -272,7 +272,7 @@ jobs:
             | Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
             | Linux | `.deb` / `.AppImage` |
             | macOS | `.dmg` (Apple Silicon + Intel) |
-            | Android | APK (separate job; when enabled) |
+            | Android | `.apk` (same GitHub Release — `NekoBeat-*-android-*.apk`) |
 
             See the README for install notes.
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
@@ -284,6 +284,8 @@ jobs:
     runs-on: ubuntu-22.04
     # Desktop should still ship if Android SDK/signing is incomplete
     continue-on-error: true
+    # Attach APK after desktop so the shared GitHub Release / tag already exists
+    needs: publish-desktop
 
     steps:
       - name: Checkout
