@@ -371,8 +371,7 @@ jobs:
           go-version: '1.26.5'
 
       - name: Build SpotiFLAC-Mobile gobackend.aar (gomobile)
-        NEKOBEAT_ENABLE_GOBACKEND=1
-        # Packaged into APK when NEKOBEAT_ENABLE_GOBACKEND=1 (loads only in :spotiflac).
+        # AAR is built here; packaging into APK uses NEKOBEAT_ENABLE_GOBACKEND on the Gradle step.
         run: |
           set -euo pipefail
           chmod +x scripts/build-gobackend-aar.sh
