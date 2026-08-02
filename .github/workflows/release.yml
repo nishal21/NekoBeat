@@ -280,11 +280,14 @@ jobs:
           args: ${{ matrix.args }}
 
   publish-android:
-    if: github.event_name != 'workflow_dispatch' || inputs.build_android
+    # Attach after desktop so the shared GitHub Release tag already exists.
+    # always() so one failed desktop platform does not skip the APK.
+    if: |
+      always() &&
+      !cancelled() &&
+      (github.event_name != 'workflow_dispatch' || inputs.build_android)
     runs-on: ubuntu-22.04
-    # Desktop should still ship if Android SDK/signing is incomplete
     continue-on-error: true
-    # Attach APK after desktop so the shared GitHub Release / tag already exists
     needs: publish-desktop
 
     steps:
@@ -418,20 +421,56 @@ jobs:
               "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
           done
 
-      - name: Upload APK artifact
+      - name: Stage APK into release/ (same folder as desktop assets)
+        id: stage_apk
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            # Match tauri-action tagName: app-v__VERSION__
+            TAG="app-v${VERSION}"
+          fi
+          mkdir -p release
+          mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk -name '*-release*.apk' -type f ! -name '*unsigned*' | sort)
+          if [[ ${#APKS[@]} -eq 0 ]]; then
+            echo "::error::No signed release APK to stage"
+            exit 1
+          fi
+          for apk in "${APKS[@]}"; do
+            base="$(basename "$apk")"
+            # Prefer abi from path: .../apk/arm64/release/app-arm64-release.apk
+            abi="android"
+            case "$apk" in
+              */universal/*) abi="android-universal" ;;
+              */arm64*/*|*/aarch64*/*) abi="android-arm64-v8a" ;;
+              */armeabi*/*|*/arm*/*) abi="android-armeabi-v7a" ;;
+              */x86_64*/*) abi="android-x86_64" ;;
+              */x86/*) abi="android-x86" ;;
+            esac
+            out="release/NekoBeat-${VERSION}-${abi}.apk"
+            cp -f "$apk" "$out"
+            echo "Staged $apk → $out"
+          done
+          ls -lah release/
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release/ APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: nekobeat-android-apk
-          path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*-release*.apk
-            src-tauri/gen/android/app/build/outputs/apk/**/*.aab
-          if-no-files-found: warn
+          path: release/*.apk
+          if-no-files-found: error
 
-      - name: Attach APK to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Attach APK to GitHub Release (with desktop installers)
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          fail_on_unmatched_files: false
+          tag_name: ${{ steps.stage_apk.outputs.tag }}
+          name: NekoBeat v${{ steps.stage_apk.outputs.version }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
+          files: release/*.apk
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
