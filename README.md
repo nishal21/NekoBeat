@@ -197,12 +197,12 @@ Thanks to everyone who maintains those projects.
 
 ## Star history
 
-<a href="https://star-history.com/#nishal21/NekoBeat&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=nishal21/NekoBeat&type=Date" />
-  </picture>
+<a href="https://www.star-history.com/?repos=nishal21%2FNekoBeat&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&theme=dark&legend=top-left&sealed_token=2J0MgO3K9CCMXEL6GbNZZ5QbnvKfdrXxvcSpnAbloVEilYtz6RAYK_6nBKnoiKAAkxcf2oz33hcnWufYQnveOnYtTl5K8otz2xg0NUtVurzelqyEMfkhrg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left&sealed_token=2J0MgO3K9CCMXEL6GbNZZ5QbnvKfdrXxvcSpnAbloVEilYtz6RAYK_6nBKnoiKAAkxcf2oz33hcnWufYQnveOnYtTl5K8otz2xg0NUtVurzelqyEMfkhrg" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nishal21/NekoBeat&type=date&legend=top-left&sealed_token=2J0MgO3K9CCMXEL6GbNZZ5QbnvKfdrXxvcSpnAbloVEilYtz6RAYK_6nBKnoiKAAkxcf2oz33hcnWufYQnveOnYtTl5K8otz2xg0NUtVurzelqyEMfkhrg" />
+ </picture>
 </a>
 
 > If NekoBeat is useful to you, a star on the repo helps a lot.
