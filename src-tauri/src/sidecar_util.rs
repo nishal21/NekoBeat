@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 use tauri::AppHandle;
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_shell::ShellExt;
 
 use crate::android_bin;

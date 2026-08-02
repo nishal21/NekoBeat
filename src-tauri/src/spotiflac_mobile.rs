@@ -12,9 +12,8 @@ const ANDROID_CLASS: &str = "com/nishal21/nekobeat/SpotiFlacMobile";
 #[cfg(target_os = "android")]
 fn with_jni_env<F, R>(f: F) -> Result<R, String>
 where
-    F: FnOnce(jni::JNIEnv, jni::objects::JClass) -> Result<R, String>,
+    F: FnOnce(&mut jni::JNIEnv, jni::objects::JClass) -> Result<R, String>,
 {
-    use jni::objects::JObject;
     use std::sync::OnceLock;
 
     static VM: OnceLock<jni::JavaVM> = OnceLock::new();
@@ -29,18 +28,23 @@ where
     let class = env
         .find_class(ANDROID_CLASS)
         .map_err(|e| format!("find_class SpotiFlacMobile: {e}"))?;
-    let class_global = env
-        .new_global_ref(JObject::from(class))
-        .map_err(|e| format!("global ref: {e}"))?;
-    let class = jni::objects::JClass::from(class_global.as_obj());
-    f(env, class)
+    f(&mut *env, class)
+}
+
+#[cfg(target_os = "android")]
+fn jni_string(env: &mut jni::JNIEnv, obj: jni::objects::JObject) -> Result<String, String> {
+    let jstr = jni::objects::JString::from(obj);
+    let java = env
+        .get_string(&jstr)
+        .map_err(|e| format!("get_string: {e}"))?;
+    Ok(java.to_string())
 }
 
 /// True when gobackend.aar is on the classpath (Android only).
 pub fn aar_available() -> bool {
     #[cfg(target_os = "android")]
     {
-        with_jni_env(|mut env, class| {
+        with_jni_env(|env, class| {
             let result = env
                 .call_static_method(class, "isAvailable", "()Z", &[])
                 .map_err(|e| format!("isAvailable: {e}"))?;
@@ -78,7 +82,7 @@ pub fn ensure_ready(app: &AppHandle) -> Result<(), String> {
             );
         }
         let files = app_files_dir(app)?;
-        with_jni_env(|mut env, class| {
+        with_jni_env(|env, class| {
             let jpath = env
                 .new_string(&files)
                 .map_err(|e| format!("new_string: {e}"))?;
@@ -91,8 +95,7 @@ pub fn ensure_ready(app: &AppHandle) -> Result<(), String> {
                 )
                 .map_err(|e| format!("ensureInitialized: {e}"))?;
             let obj = result.l().map_err(|e| e.to_string())?;
-            let jstr = jni::objects::JString::from(obj);
-            let s: String = env.get_string(&jstr).map_err(|e| e.to_string())?.into();
+            let s = jni_string(env, obj)?;
             let v: Value = serde_json::from_str(&s).unwrap_or(json!({"ok": false, "error": s}));
             if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
                 Ok(())
@@ -118,7 +121,7 @@ pub fn bootstrap_extensions(app: &AppHandle) -> Result<String, String> {
     #[cfg(target_os = "android")]
     {
         let files = app_files_dir(app)?;
-        with_jni_env(|mut env, class| {
+        with_jni_env(|env, class| {
             let jpath = env.new_string(&files).map_err(|e| e.to_string())?;
             let result = env
                 .call_static_method(
@@ -129,8 +132,7 @@ pub fn bootstrap_extensions(app: &AppHandle) -> Result<String, String> {
                 )
                 .map_err(|e| e.to_string())?;
             let obj = result.l().map_err(|e| e.to_string())?;
-            let jstr = jni::objects::JString::from(obj);
-            Ok(env.get_string(&jstr).map_err(|e| e.to_string())?.into())
+            jni_string(env, obj)
         })
     }
 }
@@ -186,8 +188,8 @@ pub async fn download_track(
         });
 
         let req_s = req.to_string();
-        let resp_s = tokio::task::spawn_blocking(move || {
-            with_jni_env(|mut env, class| {
+        let resp_s: String = tokio::task::spawn_blocking(move || {
+            with_jni_env(|env, class| {
                 let jreq = env.new_string(&req_s).map_err(|e| e.to_string())?;
                 let result = env
                     .call_static_method(
@@ -198,8 +200,7 @@ pub async fn download_track(
                     )
                     .map_err(|e| e.to_string())?;
                 let obj = result.l().map_err(|e| e.to_string())?;
-                let jstr = jni::objects::JString::from(obj);
-                Ok(env.get_string(&jstr).map_err(|e| e.to_string())?.into())
+                jni_string(env, obj)
             })
         })
         .await
@@ -252,13 +253,12 @@ pub async fn spotiflac_mobile_progress() -> Result<String, String> {
     }
     #[cfg(target_os = "android")]
     {
-        with_jni_env(|mut env, class| {
+        with_jni_env(|env, class| {
             let result = env
                 .call_static_method(class, "getProgress", "()Ljava/lang/String;", &[])
                 .map_err(|e| e.to_string())?;
             let obj = result.l().map_err(|e| e.to_string())?;
-            let jstr = jni::objects::JString::from(obj);
-            Ok(env.get_string(&jstr).map_err(|e| e.to_string())?.into())
+            jni_string(env, obj)
         })
     }
 }
@@ -272,7 +272,7 @@ pub async fn spotiflac_mobile_cancel(item_id: String) -> Result<(), String> {
     }
     #[cfg(target_os = "android")]
     {
-        with_jni_env(|mut env, class| {
+        with_jni_env(|env, class| {
             let jid = env.new_string(&item_id).map_err(|e| e.to_string())?;
             env.call_static_method(
                 class,
@@ -299,7 +299,7 @@ pub async fn spotiflac_mobile_install_extension(
     #[cfg(target_os = "android")]
     {
         let files = app_files_dir(&app)?;
-        with_jni_env(|mut env, class| {
+        with_jni_env(|env, class| {
             let jfiles = env.new_string(&files).map_err(|e| e.to_string())?;
             let jid = env.new_string(&extension_id).map_err(|e| e.to_string())?;
             let result = env
@@ -311,8 +311,7 @@ pub async fn spotiflac_mobile_install_extension(
                 )
                 .map_err(|e| e.to_string())?;
             let obj = result.l().map_err(|e| e.to_string())?;
-            let jstr = jni::objects::JString::from(obj);
-            Ok(env.get_string(&jstr).map_err(|e| e.to_string())?.into())
+            jni_string(env, obj)
         })
     }
 }

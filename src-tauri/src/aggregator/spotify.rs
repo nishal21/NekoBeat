@@ -3,7 +3,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 use futures::future::FutureExt;
 
-use crate::sidecar_util::{self, DOWNLOAD_TIMEOUT, METADATA_TIMEOUT};
+use crate::sidecar_util::{self, METADATA_TIMEOUT};
+#[cfg(not(target_os = "android"))]
+use crate::sidecar_util::DOWNLOAD_TIMEOUT;
 
 /// Resolve Spotify: prefer cached HiFi file → instant YouTube match → background SpotiFLAC HiFi.
 /// Optional `hint_title` / `hint_artist` from search UI skip METADATA entirely.

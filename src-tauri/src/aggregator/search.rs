@@ -1,6 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
-use crate::sidecar_util::{self, METADATA_TIMEOUT, SEARCH_TIMEOUT};
+use crate::sidecar_util::{self, METADATA_TIMEOUT};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::sidecar_util::SEARCH_TIMEOUT;
 
 #[derive(Serialize)]
 pub struct ExternalTrack {
