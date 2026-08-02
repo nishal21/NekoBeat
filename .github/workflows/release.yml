@@ -100,23 +100,47 @@ jobs:
           EOF
           sed -i 's/^          //' "$NOTES_FILE"
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Reusing existing release tag=$TAG"
-            if [ "$DRAFT" = "true" ]; then
-              gh release edit "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --draft
-            else
-              gh release edit "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --draft=false
+          # Resolve release id without /releases/tags/{tag} — that 404s for
+          # draft "untagged-*" releases (common after workflow_dispatch).
+          resolve_release_id() {
+            local id=""
+            id="$(gh release view "$TAG" --json databaseId --jq .databaseId 2>/dev/null || true)"
+            if [ -z "$id" ]; then
+              id="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                --jq ".[] | select(.tag_name == \"${TAG}\" or .name == \"${RELEASE_NAME}\") | .id" \
+                | head -n1 || true)"
             fi
+            printf '%s' "$id"
+          }
+
+          EXISTING_ID="$(resolve_release_id || true)"
+          if [ -n "${EXISTING_ID}" ]; then
+            echo "Reusing existing release id=${EXISTING_ID} tag=${TAG}"
+            # Bind a real git tag to this commit so later uploads /tag/ lookups work
+            EDIT_ARGS=(--title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --tag "$TAG" --target "$GITHUB_SHA")
+            if [ "$DRAFT" = "true" ]; then
+              EDIT_ARGS+=(--draft)
+            else
+              EDIT_ARGS+=(--draft=false)
+            fi
+            # Prefer edit by numeric id (works for untagged-xxx drafts)
+            gh release edit "$EXISTING_ID" "${EDIT_ARGS[@]}" || gh release edit "$TAG" "${EDIT_ARGS[@]}"
           else
-            echo "Creating release tag=$TAG draft=$DRAFT"
+            echo "Creating release tag=$TAG draft=$DRAFT target=$GITHUB_SHA"
+            CREATE_ARGS=(--title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --target "$GITHUB_SHA")
             if [ "$DRAFT" = "true" ]; then
-              gh release create "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE" --draft
-            else
-              gh release create "$TAG" --title "$RELEASE_NAME" --notes-file "$NOTES_FILE"
+              CREATE_ARGS+=(--draft)
             fi
+            gh release create "$TAG" "${CREATE_ARGS[@]}"
           fi
 
-          RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)"
+          RELEASE_ID="$(resolve_release_id)"
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Could not resolve GitHub release id for tag=${TAG}"
+            gh release list --limit 20 || true
+            exit 1
+          fi
+
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
