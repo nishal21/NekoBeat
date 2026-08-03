@@ -1,8 +1,3 @@
-# GStreamer Android cross-compile env was previously hardcoded to a local Windows path.
-# Local Android builds: source scripts/setup-android-env.ps1 (monorepo) or export
-# GSTREAMER_ROOT_ANDROID + PKG_CONFIG_* yourself.
-# CI: scripts/ci-android-env.sh writes the same vars into $GITHUB_ENV.
-
 [target.x86_64-pc-windows-msvc]
 # gobject-2.0-0.dll cannot be delay-loaded (data symbol imports), so it must be
 # available at process startup. This runner script ensures gstreamer/bin is on PATH.

@@ -1,38 +1,38 @@
-pub mod audio;
-pub mod library;
 pub mod aggregator;
-pub mod discord_rpc;
-pub mod offline;
-pub mod news;
-pub mod process_util;
-pub mod path_util;
-pub mod sidecar_util;
 pub mod android_bin;
-pub mod gst_init;
-pub mod spotiflac_mobile;
-pub mod lyrics_cache;
-pub mod playback_state;
-pub mod playlists;
 #[cfg(target_os = "android")]
 pub mod android_content;
 #[cfg(target_os = "android")]
-pub mod lyrics_notification;
-#[cfg(target_os = "android")]
 pub mod android_playback;
+pub mod audio;
+pub mod discord_rpc;
+pub mod gst_init;
+pub mod library;
+pub mod lyrics_cache;
+#[cfg(target_os = "android")]
+pub mod lyrics_notification;
+pub mod news;
+pub mod offline;
+pub mod path_util;
+pub mod playback_state;
+pub mod playlists;
+pub mod process_util;
+pub mod sidecar_util;
+pub mod spotiflac_mobile;
 #[cfg(target_os = "windows")]
 pub mod windows_taskbar;
 
+#[cfg(not(mobile))]
+use std::sync::{Arc, Mutex};
+#[cfg(not(mobile))]
+use tauri::Emitter;
+use tauri::Manager;
 #[cfg(not(mobile))]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     WindowEvent,
 };
-use tauri::Manager;
-#[cfg(not(mobile))]
-use tauri::Emitter;
-#[cfg(not(mobile))]
-use std::sync::{Arc, Mutex};
 #[cfg(not(mobile))]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -48,6 +48,11 @@ fn log_frontend(msg: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Tauri pulls reqwest 0.13 with rustls-no-provider. Without an installed
+    // CryptoProvider, Client::new() panics ("No provider set") during WebView
+    // request handling and aborts the Android process.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // `mut` only needed when desktop plugins are chained below.
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -74,8 +79,11 @@ pub fn run() {
 
     let builder = builder
         .setup(|app| {
+            #[cfg(not(target_os = "android"))]
+            {
             gst_init::ensure_initialized();
             android_bin::ensure_android_sidecars(app.handle());
+            }
 
             let audio_state = audio::init_audio_thread(app.handle().clone());
             app.manage(audio_state);
@@ -120,11 +128,14 @@ pub fn run() {
             library::scan_directory,
             library::import_audio_files,
             library::scan_device_music,
+            library::refresh_library,
             library::runtime_platform,
             library::get_cached_tracks,
             library::clear_library,
             library::reindex_library,
             library::update_library_enrichment,
+            library::cache_remote_artwork,
+            library::artwork_as_data_url,
             library::get_library_settings,
             library::set_library_min_file_size,
             library::remove_library_directory,
@@ -140,9 +151,9 @@ pub fn run() {
             #[cfg(target_os = "android")]
             lyrics_notification::update_lyrics_notification,
             #[cfg(target_os = "android")]
-            lyrics_notification::clear_lyrics_notification_cmd,
+            lyrics_notification::set_lyrics_cues,
             #[cfg(target_os = "android")]
-            android_playback::start_android_playback_service,
+            lyrics_notification::clear_lyrics_notification_cmd,
             #[cfg(target_os = "android")]
             android_playback::update_android_playback_metadata,
             #[cfg(target_os = "android")]

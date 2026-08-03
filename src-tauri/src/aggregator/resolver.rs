@@ -85,10 +85,7 @@ pub async fn prefetch_url_with_duration(
     };
     match result {
         Ok(uri) => {
-            println!(
-                "Prefetch: ready {}",
-                &uri[..std::cmp::min(uri.len(), 100)]
-            );
+            println!("Prefetch: ready {}", &uri[..std::cmp::min(uri.len(), 100)]);
             Ok(())
         }
         Err(e) => {
@@ -133,10 +130,7 @@ fn find_cached_yt_file(dir: &Path, video_id: &str) -> Option<PathBuf> {
             continue;
         }
         let name = path.file_name()?.to_string_lossy();
-        if name.starts_with(video_id)
-            && !name.ends_with(".part")
-            && !name.ends_with(".ytdl")
-        {
+        if name.starts_with(video_id) && !name.ends_with(".part") && !name.ends_with(".ytdl") {
             if let Ok(meta) = entry.metadata() {
                 if meta.len() > 50_000 {
                     return Some(path);
@@ -219,8 +213,11 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
 
                 let mut cmd = tokio::process::Command::new(ytdlp_path);
                 cmd.args(&args);
-                match crate::process_util::run_silent_timeout(cmd, std::time::Duration::from_secs(120))
-                    .await
+                match crate::process_util::run_silent_timeout(
+                    cmd,
+                    std::time::Duration::from_secs(120),
+                )
+                .await
                 {
                     Ok(output) if output.status.success() => {
                         if let Some(path) = find_cached_yt_file(&cache_dir, &video_id) {
@@ -255,7 +252,10 @@ async fn resolve_youtube_download(app: &AppHandle, url: &str) -> Result<String, 
             }
         }
         Err(e) => {
-            println!("YouTube: yt-dlp unavailable ({}) — trying in-process download", e);
+            println!(
+                "YouTube: yt-dlp unavailable ({}) — trying in-process download",
+                e
+            );
             push_err(&mut last_err, format!("yt-dlp unavailable: {}", e));
         }
     }
@@ -293,7 +293,8 @@ fn push_err(last: &mut String, msg: String) {
 }
 
 /// Download YouTube audio with rusty_ytdl (no external binary).
-/// Falls back to reqwest fetch of the stream URL when Video::download fails (common on Android).
+/// Falls back to reqwest fetch of the stream URL when Video::download fails.
+#[cfg(not(target_os = "android"))]
 async fn resolve_youtube_rusty(
     cache_dir: &Path,
     url: &str,
@@ -310,20 +311,15 @@ async fn resolve_youtube_rusty(
         ..Default::default()
     };
 
-    let video = Video::new_with_options(url, options)
-        .map_err(|e| format!("init failed: {}", e))?;
+    let video = Video::new_with_options(url, options).map_err(|e| format!("init failed: {}", e))?;
 
     let info = video
         .get_info()
         .await
         .map_err(|e| format!("get_info failed: {}", e))?;
 
-    // Prefer MP4/M4A for Android GStreamer (isomp4 + faad/androidmedia); then webm/opus.
-    let mut formats: Vec<_> = info
-        .formats
-        .iter()
-        .filter(|f| f.has_audio)
-        .collect();
+    // Prefer MP4/M4A; then webm/opus.
+    let mut formats: Vec<_> = info.formats.iter().filter(|f| f.has_audio).collect();
     formats.sort_by_key(|f| {
         let c = f.mime_type.container.to_ascii_lowercase();
         let audio_only = !f.has_video;
@@ -358,7 +354,6 @@ async fn resolve_youtube_rusty(
             continue;
         }
 
-        // 1) Direct HTTP download (works when rusty download() misbehaves on Android)
         match download_url_to_file(stream_url, &out_path).await {
             Ok(()) => {
                 if file_big_enough(&out_path) {
@@ -377,7 +372,7 @@ async fn resolve_youtube_rusty(
         }
     }
 
-    // 2) rusty_ytdl built-in download as last resort
+    // rusty_ytdl built-in download as last resort
     let out_path = cache_dir.join(format!("{}.m4a", video_id));
     let _ = std::fs::remove_file(&out_path);
     match video.download(&out_path).await {
@@ -397,6 +392,15 @@ async fn resolve_youtube_rusty(
     } else {
         last
     })
+}
+
+#[cfg(target_os = "android")]
+async fn resolve_youtube_rusty(
+    _cache_dir: &Path,
+    _url: &str,
+    _video_id: &str,
+) -> Result<String, String> {
+    Err("Online YouTube download is disabled on Android Media3 local builds".into())
 }
 
 fn file_big_enough(path: &Path) -> bool {
@@ -432,10 +436,7 @@ async fn download_url_to_file(url: &str, out_path: &Path) -> Result<(), String> 
         return Err(format!("HTTP {}", res.status()));
     }
 
-    let bytes = res
-        .bytes()
-        .await
-        .map_err(|e| format!("body: {}", e))?;
+    let bytes = res.bytes().await.map_err(|e| format!("body: {}", e))?;
     if bytes.len() < 20_000 {
         return Err(format!("body too small ({} bytes)", bytes.len()));
     }
@@ -502,7 +503,12 @@ async fn resolve_youtube_via_proxy_apis(
         ];
 
         for api_url in urls {
-            let res = match client.get(&api_url).header("Accept", "application/json").send().await {
+            let res = match client
+                .get(&api_url)
+                .header("Accept", "application/json")
+                .send()
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     push_err(&mut last, format!("{}: {}", base, e));
@@ -510,10 +516,7 @@ async fn resolve_youtube_via_proxy_apis(
                 }
             };
             if !res.status().is_success() {
-                push_err(
-                    &mut last,
-                    format!("{} → HTTP {}", api_url, res.status()),
-                );
+                push_err(&mut last, format!("{} → HTTP {}", api_url, res.status()));
                 continue;
             }
             let json: serde_json::Value = match res.json().await {
@@ -569,7 +572,11 @@ fn pick_proxy_audio_url(json: &serde_json::Value) -> Option<(String, String)> {
 
     if let Some(arr) = json.get("audioStreams").and_then(|v| v.as_array()) {
         for item in arr {
-            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let url = item
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if url.is_empty() {
                 continue;
             }
@@ -612,7 +619,11 @@ fn pick_proxy_audio_url(json: &serde_json::Value) -> Option<(String, String)> {
             if !typ.starts_with("audio/") {
                 continue;
             }
-            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let url = item
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if url.is_empty() {
                 continue;
             }
@@ -637,7 +648,11 @@ fn pick_proxy_audio_url(json: &serde_json::Value) -> Option<(String, String)> {
     // Progressive muxed (itag 18) — last resort but often works
     if let Some(arr) = json.get("formatStreams").and_then(|v| v.as_array()) {
         for item in arr {
-            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let url = item
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if url.is_empty() {
                 continue;
             }
@@ -646,7 +661,11 @@ fn pick_proxy_audio_url(json: &serde_json::Value) -> Option<(String, String)> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("mp4")
                 .to_lowercase();
-            let ext = if container.contains("mp4") { "mp4" } else { "webm" };
+            let ext = if container.contains("mp4") {
+                "mp4"
+            } else {
+                "webm"
+            };
             candidates.push((1, url, ext.to_string()));
         }
     }
@@ -754,11 +773,12 @@ async fn scrape_youtube_search_candidates(
         .find(";</script>")
         .ok_or("Could not find end of ytInitialData")?;
     let json_str = &html[json_start..json_start + json_end];
-    let data: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| e.to_string())?;
+    let data: serde_json::Value = serde_json::from_str(json_str).map_err(|e| e.to_string())?;
 
     let contents = data
-        .pointer("/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents")
+        .pointer(
+            "/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents",
+        )
         .and_then(|c| c.as_array());
 
     let mut out = Vec::new();
@@ -896,10 +916,7 @@ fn token_overlap_score(hay: &str, needle: &str) -> i32 {
     if needle.is_empty() {
         return 0;
     }
-    let tokens: Vec<&str> = needle
-        .split_whitespace()
-        .filter(|t| t.len() > 1)
-        .collect();
+    let tokens: Vec<&str> = needle.split_whitespace().filter(|t| t.len() > 1).collect();
     if tokens.is_empty() {
         return 0;
     }
@@ -1180,9 +1197,7 @@ async fn resolve_soundcloud_download(app: &AppHandle, url: &str) -> Result<Strin
                 None,
             )
             .await
-            .map_err(|e| {
-                format!("SoundCloud: HLS-only and YouTube proxy fallback failed ({e})")
-            });
+            .map_err(|e| format!("SoundCloud: HLS-only and YouTube proxy fallback failed ({e})"));
         }
         return Err(
             "SoundCloud: only HLS available and CDN streaming is broken — no title for YouTube fallback"
@@ -1212,7 +1227,8 @@ async fn resolve_soundcloud_download(app: &AppHandle, url: &str) -> Result<Strin
         }
         Err(e) => {
             eprintln!("SoundCloud: download failed: {}", e);
-            if let Ok((title, artist)) = crate::aggregator::soundcloud::fetch_title_artist(url).await
+            if let Ok((title, artist)) =
+                crate::aggregator::soundcloud::fetch_title_artist(url).await
             {
                 let query = format!("{} {}", artist, title).trim().to_string();
                 resolve_youtube_search_matched(

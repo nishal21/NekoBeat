@@ -1,10 +1,10 @@
-use regex::Regex;
-use serde_json::Value;
+use crate::aggregator::search::ExternalTrack;
 use lazy_static::lazy_static;
+use regex::Regex;
 use reqwest::Client;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::aggregator::search::ExternalTrack;
 
 lazy_static! {
     static ref CLIENT_ID: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -13,7 +13,11 @@ lazy_static! {
 fn append_query(base: &str, pairs: &[(&str, &str)]) -> String {
     let mut out = base.to_string();
     for (i, (k, v)) in pairs.iter().enumerate() {
-        let sep = if i == 0 && !out.contains('?') { "?" } else { "&" };
+        let sep = if i == 0 && !out.contains('?') {
+            "?"
+        } else {
+            "&"
+        };
         out.push_str(sep);
         out.push_str(k);
         out.push('=');
@@ -39,7 +43,8 @@ pub async fn get_client_id() -> Result<String, String> {
         .text().await.map_err(|e| e.to_string())?;
 
     let script_re = Regex::new(r#"src="(https://a-v2\.sndcdn\.com/assets/[^"]+)""#).unwrap();
-    let mut script_urls: Vec<String> = script_re.captures_iter(&home_res)
+    let mut script_urls: Vec<String> = script_re
+        .captures_iter(&home_res)
         .map(|cap| cap[1].to_string())
         .collect();
 
@@ -139,13 +144,18 @@ async fn search_inner(query: &str, page: u32) -> Result<Vec<ExternalTrack>, Stri
     if let Some(collection) = res["collection"].as_array() {
         for item in collection {
             if let Some(id) = item["id"].as_i64() {
-                let title = item["title"].as_str().unwrap_or("Unknown Title").to_string();
-                let artist = item["user"]["username"].as_str().unwrap_or("Unknown Artist").to_string();
+                let title = item["title"]
+                    .as_str()
+                    .unwrap_or("Unknown Title")
+                    .to_string();
+                let artist = item["user"]["username"]
+                    .as_str()
+                    .unwrap_or("Unknown Artist")
+                    .to_string();
                 let duration_ms = item["duration"].as_u64().unwrap_or(0);
                 let policy = item["policy"].as_str().unwrap_or("ALLOW");
 
-                let mut artwork_url = item["artwork_url"].as_str()
-                    .unwrap_or("").to_string();
+                let mut artwork_url = item["artwork_url"].as_str().unwrap_or("").to_string();
                 if artwork_url.contains("large.jpg") {
                     artwork_url = artwork_url.replace("large.jpg", "t500x500.jpg");
                 }
@@ -188,7 +198,8 @@ pub async fn resolve(url: &str) -> Result<String, String> {
 
     // Step 1: Get full track metadata (includes track_authorization needed for full streams)
     let track_id = if url.contains("/tracks/") {
-        url.split("/tracks/").last()
+        url.split("/tracks/")
+            .last()
             .and_then(|s| s.split('?').next())
             .and_then(|s| s.split('&').next())
             .unwrap_or("")
@@ -202,11 +213,14 @@ pub async fn resolve(url: &str) -> Result<String, String> {
             )
         })
         .await?;
-        track_data["id"].as_i64()
+        track_data["id"]
+            .as_i64()
             .map(|id| id.to_string())
             .ok_or("Could not resolve track ID from permalink".to_string())?
     } else {
-        url.trim_end_matches('/').rsplit('/').next()
+        url.trim_end_matches('/')
+            .rsplit('/')
+            .next()
             .and_then(|s| s.split('?').next())
             .unwrap_or("")
             .to_string()
@@ -235,19 +249,28 @@ pub async fn resolve(url: &str) -> Result<String, String> {
     if track_auth.is_empty() {
         println!("SoundCloud: WARNING - No track_authorization found, streams may be previews");
     } else {
-        println!("SoundCloud: Got track_authorization ({}...)", &track_auth[..std::cmp::min(track_auth.len(), 20)]);
+        println!(
+            "SoundCloud: Got track_authorization ({}...)",
+            &track_auth[..std::cmp::min(track_auth.len(), 20)]
+        );
     }
 
     let policy = track_data["policy"].as_str().unwrap_or("ALLOW");
     let access = track_data["access"].as_str().unwrap_or("unknown");
-    let monetization = track_data["monetization_model"].as_str().unwrap_or("unknown");
+    let monetization = track_data["monetization_model"]
+        .as_str()
+        .unwrap_or("unknown");
     let full_duration = track_data["full_duration"].as_u64().unwrap_or(0);
     let duration = track_data["duration"].as_u64().unwrap_or(0);
-    println!("SoundCloud: policy={}, access={}, monetization={}, duration={}ms, full_duration={}ms",
-        policy, access, monetization, duration, full_duration);
+    println!(
+        "SoundCloud: policy={}, access={}, monetization={}, duration={}ms, full_duration={}ms",
+        policy, access, monetization, duration, full_duration
+    );
 
     if policy == "BLOCK" {
-        return Err("SoundCloud: This track is not available for streaming in your region".to_string());
+        return Err(
+            "SoundCloud: This track is not available for streaming in your region".to_string(),
+        );
     }
 
     let is_snipped = policy == "SNIP";
@@ -256,12 +279,16 @@ pub async fn resolve(url: &str) -> Result<String, String> {
         match resolve_via_proxy(&track_id, &client_id).await {
             Ok(url) => return Ok(url),
             Err(e) => {
-                println!("SoundCloud: Proxy bypass failed: {}. Falling back to preview...", e);
+                println!(
+                    "SoundCloud: Proxy bypass failed: {}. Falling back to preview...",
+                    e
+                );
             }
         }
     }
 
-    let transcodings = track_data["media"]["transcodings"].as_array()
+    let transcodings = track_data["media"]["transcodings"]
+        .as_array()
         .ok_or("SoundCloud: No media transcodings found")?;
 
     let mut progressive_url: Option<String> = None;
@@ -274,8 +301,14 @@ pub async fn resolve(url: &str) -> Result<String, String> {
         let tc_url = tc["url"].as_str().unwrap_or("");
         let snipped = tc["snipped"].as_bool().unwrap_or(false);
         let preset = tc["preset"].as_str().unwrap_or("unknown");
-        println!("SoundCloud: transcoding: protocol={}, mime={}, snipped={}, preset={}, url_len={}",
-            protocol, mime, snipped, preset, tc_url.len());
+        println!(
+            "SoundCloud: transcoding: protocol={}, mime={}, snipped={}, preset={}, url_len={}",
+            protocol,
+            mime,
+            snipped,
+            preset,
+            tc_url.len()
+        );
 
         if protocol == "progressive" && mime.contains("mpeg") && progressive_url.is_none() {
             progressive_url = Some(tc_url.to_string());
@@ -294,22 +327,30 @@ pub async fn resolve(url: &str) -> Result<String, String> {
         if resp.status().is_success() {
             if let Ok(widget_data) = resp.json::<Value>().await {
                 if let Some(w_transcodings) = widget_data["media"]["transcodings"].as_array() {
-                    let w_track_auth = widget_data["track_authorization"].as_str().unwrap_or(track_auth);
+                    let w_track_auth = widget_data["track_authorization"]
+                        .as_str()
+                        .unwrap_or(track_auth);
 
                     for tc in w_transcodings {
                         let protocol = tc["format"]["protocol"].as_str().unwrap_or("");
                         let tc_url = tc["url"].as_str().unwrap_or("");
                         if !tc_url.is_empty() && (protocol == "progressive" || protocol == "hls") {
-                            let auth_url = append_query(tc_url, &[
-                                ("client_id", &client_id),
-                                ("track_authorization", w_track_auth),
-                            ]);
+                            let auth_url = append_query(
+                                tc_url,
+                                &[
+                                    ("client_id", &client_id),
+                                    ("track_authorization", w_track_auth),
+                                ],
+                            );
                             if let Ok(stream_resp) = client.get(&auth_url).send().await {
                                 if stream_resp.status().is_success() {
                                     if let Ok(stream_data) = stream_resp.json::<Value>().await {
                                         if let Some(url) = stream_data["url"].as_str() {
                                             if !url.is_empty() && !is_preview_url(url) {
-                                                println!("SoundCloud: Widget API got full {} stream!", protocol);
+                                                println!(
+                                                    "SoundCloud: Widget API got full {} stream!",
+                                                    protocol
+                                                );
                                                 return Ok(url.to_string());
                                             }
                                         }
@@ -324,43 +365,53 @@ pub async fn resolve(url: &str) -> Result<String, String> {
     }
 
     if let Some(prog_url) = &progressive_url {
-        let auth_url = append_query(prog_url, &[
-            ("client_id", &client_id),
-            ("track_authorization", track_auth),
-        ]);
+        let auth_url = append_query(
+            prog_url,
+            &[
+                ("client_id", &client_id),
+                ("track_authorization", track_auth),
+            ],
+        );
         println!("SoundCloud: Trying progressive stream...");
 
         match client.get(&auth_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<Value>().await {
-                    Ok(data) => {
-                        if let Some(stream_url) = data["url"].as_str() {
-                            if !stream_url.is_empty() {
-                                if is_preview_url(stream_url) {
-                                    println!("SoundCloud: Progressive returned PREVIEW URL, saving as fallback...");
-                                    if preview_fallback.is_none() {
-                                        preview_fallback = Some(stream_url.to_string());
-                                    }
-                                } else {
-                                    println!("SoundCloud: Got progressive stream URL ({}...)", &stream_url[..std::cmp::min(stream_url.len(), 80)]);
-                                    return Ok(stream_url.to_string());
+            Ok(resp) if resp.status().is_success() => match resp.json::<Value>().await {
+                Ok(data) => {
+                    if let Some(stream_url) = data["url"].as_str() {
+                        if !stream_url.is_empty() {
+                            if is_preview_url(stream_url) {
+                                println!("SoundCloud: Progressive returned PREVIEW URL, saving as fallback...");
+                                if preview_fallback.is_none() {
+                                    preview_fallback = Some(stream_url.to_string());
                                 }
+                            } else {
+                                println!(
+                                    "SoundCloud: Got progressive stream URL ({}...)",
+                                    &stream_url[..std::cmp::min(stream_url.len(), 80)]
+                                );
+                                return Ok(stream_url.to_string());
                             }
                         }
                     }
-                    Err(e) => println!("SoundCloud: Progressive JSON parse failed: {}", e),
                 }
-            }
-            Ok(resp) => println!("SoundCloud: Progressive request returned status {}", resp.status()),
+                Err(e) => println!("SoundCloud: Progressive JSON parse failed: {}", e),
+            },
+            Ok(resp) => println!(
+                "SoundCloud: Progressive request returned status {}",
+                resp.status()
+            ),
             Err(e) => println!("SoundCloud: Progressive request failed: {}", e),
         }
     }
 
     if let Some(hls_tc_url) = &hls_url {
-        let auth_url = append_query(hls_tc_url, &[
-            ("client_id", &client_id),
-            ("track_authorization", track_auth),
-        ]);
+        let auth_url = append_query(
+            hls_tc_url,
+            &[
+                ("client_id", &client_id),
+                ("track_authorization", track_auth),
+            ],
+        );
         println!("SoundCloud: Trying HLS stream...");
 
         match client.get(&auth_url).send().await {
@@ -375,7 +426,10 @@ pub async fn resolve(url: &str) -> Result<String, String> {
                                         preview_fallback = Some(m3u8_url.to_string());
                                     }
                                 } else {
-                                    println!("SoundCloud: Got HLS m3u8 URL ({}...)", &m3u8_url[..std::cmp::min(m3u8_url.len(), 80)]);
+                                    println!(
+                                        "SoundCloud: Got HLS m3u8 URL ({}...)",
+                                        &m3u8_url[..std::cmp::min(m3u8_url.len(), 80)]
+                                    );
                                     return Ok(m3u8_url.to_string());
                                 }
                             }
@@ -399,15 +453,24 @@ pub async fn resolve(url: &str) -> Result<String, String> {
         if resp.status().is_success() {
             if let Ok(streams_data) = resp.json::<Value>().await {
                 if let Some(mp3_url) = streams_data["http_mp3_128_url"].as_str() {
-                    println!("SoundCloud: Found /streams MP3 URL (may be preview): {}...", &mp3_url[..std::cmp::min(mp3_url.len(), 60)]);
+                    println!(
+                        "SoundCloud: Found /streams MP3 URL (may be preview): {}...",
+                        &mp3_url[..std::cmp::min(mp3_url.len(), 60)]
+                    );
                     return Ok(mp3_url.to_string());
                 }
                 if let Some(hls_mp3) = streams_data["hls_mp3_128_url"].as_str() {
-                    println!("SoundCloud: Found /streams HLS URL: {}...", &hls_mp3[..std::cmp::min(hls_mp3.len(), 60)]);
+                    println!(
+                        "SoundCloud: Found /streams HLS URL: {}...",
+                        &hls_mp3[..std::cmp::min(hls_mp3.len(), 60)]
+                    );
                     return Ok(hls_mp3.to_string());
                 }
                 if let Some(hls_opus) = streams_data["hls_opus_64_url"].as_str() {
-                    println!("SoundCloud: Found /streams HLS Opus URL: {}...", &hls_opus[..std::cmp::min(hls_opus.len(), 60)]);
+                    println!(
+                        "SoundCloud: Found /streams HLS Opus URL: {}...",
+                        &hls_opus[..std::cmp::min(hls_opus.len(), 60)]
+                    );
                     return Ok(hls_opus.to_string());
                 }
             }
@@ -453,7 +516,11 @@ pub async fn fetch_title_artist(url: &str) -> Result<(String, String), String> {
     })
     .await?;
 
-    let title = track_data["title"].as_str().unwrap_or("").trim().to_string();
+    let title = track_data["title"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let artist = track_data["user"]["username"]
         .as_str()
         .unwrap_or("")
@@ -466,9 +533,7 @@ pub async fn fetch_title_artist(url: &str) -> Result<(String, String), String> {
 }
 
 fn is_preview_url(url: &str) -> bool {
-    url.contains("/preview/")
-        || url.contains("preview-media")
-        || url.contains("/playlist/0/30/")
+    url.contains("/preview/") || url.contains("preview-media") || url.contains("/playlist/0/30/")
 }
 
 async fn resolve_via_proxy(track_id: &str, client_id: &str) -> Result<String, String> {
@@ -485,20 +550,28 @@ async fn resolve_via_proxy(track_id: &str, client_id: &str) -> Result<String, St
 
     println!("SoundCloud: Trying Cloudflare Worker resolver...");
 
-    let resp = client.get(&worker_url).send().await
+    let resp = client
+        .get(&worker_url)
+        .send()
+        .await
         .map_err(|e| format!("Worker request failed: {}", e))?;
 
     if !resp.status().is_success() {
         return Err(format!("Worker returned status {}", resp.status()));
     }
 
-    let data: serde_json::Value = resp.json().await
+    let data: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("Worker JSON parse failed: {}", e))?;
 
     if let Some(err) = data["error"].as_str() {
         println!("SoundCloud: Worker reported: {}", err);
         if data["snipped"].as_bool().unwrap_or(false) {
-            return Err(format!("Track is globally restricted by rights holder (snipped). {}", err));
+            return Err(format!(
+                "Track is globally restricted by rights holder (snipped). {}",
+                err
+            ));
         }
         return Err(err.to_string());
     }
@@ -509,7 +582,10 @@ async fn resolve_via_proxy(track_id: &str, client_id: &str) -> Result<String, St
             println!("SoundCloud: Worker resolved full {} stream!", protocol);
             return Ok(url.to_string());
         }
-        println!("SoundCloud: Worker returned preview URL: {}...", &url[..std::cmp::min(url.len(), 80)]);
+        println!(
+            "SoundCloud: Worker returned preview URL: {}...",
+            &url[..std::cmp::min(url.len(), 80)]
+        );
         return Err("Worker returned a preview URL — track is globally restricted".to_string());
     }
 

@@ -1,5 +1,6 @@
-# CI smoke — frontend typecheck + Linux desktop compile deps
-# Full Win/Mac/Android builds run on Release workflow (tags / workflow_dispatch).
+# CI smoke — frontend typecheck + Linux desktop compile.
+# Full Win/Mac/Linux/Android installers: workflow "Build all platforms"
+# Signed GitHub Releases: workflow "Release" (tags v* / workflow_dispatch)
 
 name: CI
 

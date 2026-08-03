@@ -1,11 +1,11 @@
-use tauri::{AppHandle, Emitter, Manager};
+use futures::future::FutureExt;
 use serde_json::Value;
 use std::path::PathBuf;
-use futures::future::FutureExt;
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::sidecar_util::{self, METADATA_TIMEOUT};
 #[cfg(not(target_os = "android"))]
 use crate::sidecar_util::DOWNLOAD_TIMEOUT;
+use crate::sidecar_util::{self, METADATA_TIMEOUT};
 
 /// Resolve Spotify: prefer cached HiFi file → instant YouTube match → background SpotiFLAC HiFi.
 /// Optional `hint_title` / `hint_artist` from search UI skip METADATA entirely.
@@ -126,7 +126,11 @@ async fn resolve_spotify_url_inner(
     .await?;
 
     // Hints mean we found the right match — overwrite liked offline file (fixes prior bad downloads)
-    if hint_title.map(str::trim).filter(|s| !s.is_empty()).is_some() {
+    if hint_title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
         if let Some(ref id) = track_id {
             if let Some(path) = file_uri_to_path(&stream) {
                 if path.is_file() {
@@ -242,7 +246,10 @@ fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
 }
 
 fn hifi_cache_dir(app: &AppHandle) -> PathBuf {
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let dir = app_dir.join("nekobeat_spotify_hifi");
     let _ = std::fs::create_dir_all(&dir);
     dir
@@ -281,7 +288,10 @@ async fn fetch_spotify_oembed(url: &str) -> Result<Value, String> {
     if !res.status().is_success() {
         return Err(format!("oEmbed HTTP {}", res.status()));
     }
-    let parsed: Value = res.json().await.map_err(|e| format!("oEmbed parse: {}", e))?;
+    let parsed: Value = res
+        .json()
+        .await
+        .map_err(|e| format!("oEmbed parse: {}", e))?;
     let full_title = parsed["title"].as_str().unwrap_or("").to_string();
     if full_title.is_empty() {
         return Err("oEmbed: empty title".into());
@@ -349,8 +359,7 @@ async fn download_spotify_hifi(app: &AppHandle, url: &str) -> Result<PathBuf, St
     let out_dir = hifi_cache_dir(app);
     let out_str = out_dir.to_string_lossy().to_string();
 
-    let output =
-        sidecar_util::run_sidecar(app, &[url, &out_str], DOWNLOAD_TIMEOUT).await?;
+    let output = sidecar_util::run_sidecar(app, &[url, &out_str], DOWNLOAD_TIMEOUT).await?;
 
     if !output.success {
         let err = String::from_utf8_lossy(&output.stderr);

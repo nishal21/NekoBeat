@@ -46,11 +46,7 @@ fn clamp_playback_rate(rate: f64) -> Result<f64, String> {
     Ok(rate.clamp(MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE))
 }
 
-fn replay_gain_multiplier(
-    mode: ReplayGainMode,
-    preamp_db: f64,
-    tags: ReplayGainTags,
-) -> f64 {
+fn replay_gain_multiplier(mode: ReplayGainMode, preamp_db: f64, tags: ReplayGainTags) -> f64 {
     let (gain_db, peak) = match mode {
         ReplayGainMode::Off => return 1.0,
         ReplayGainMode::Track => (tags.track_gain_db, tags.track_peak),
@@ -77,15 +73,22 @@ fn output_volume(user_volume: f64, replay_gain: f64) -> f64 {
     user_volume.clamp(0.0, 1.0) * replay_gain.clamp(0.0, 4.0)
 }
 
+#[cfg(any(target_os = "android", test))]
+fn is_android_local_source(path: &str) -> bool {
+    path.starts_with("content://")
+        || path.starts_with("file://")
+        || std::path::Path::new(path).is_absolute()
+}
+
+#[cfg(not(target_os = "android"))]
 fn seek_with_rate(
     element: &gstreamer::Element,
     position: std::time::Duration,
     rate: f64,
 ) -> Result<(), String> {
     use gstreamer::prelude::*;
-    let position = gstreamer::ClockTime::from_nseconds(
-        position.as_nanos().min(u64::MAX as u128) as u64,
-    );
+    let position =
+        gstreamer::ClockTime::from_nseconds(position.as_nanos().min(u64::MAX as u128) as u64);
     element
         .seek(
             rate,
@@ -123,15 +126,15 @@ pub struct AudioState {
     play_generation: Arc<AtomicU64>,
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
     let (tx, rx) = channel::<AudioCommand>();
     let tx_internal = tx.clone();
     let play_generation = Arc::new(AtomicU64::new(0));
 
     thread::spawn(move || {
-        // Keep Android startup lightweight and resilient: constructing playbin/OpenSLES can load
-        // a large native plugin graph. Cache harmless configuration/query commands and only build
-        // the pipeline after the user explicitly asks to play something.
+        // Construct playbin only after the first explicit play request. Cache harmless
+        // configuration/query commands before then.
         let mut current_volume: f64 = 1.0;
         let mut current_replay_gain: f64 = 1.0;
         #[cfg_attr(target_os = "android", allow(unused_mut))]
@@ -198,13 +201,19 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         };
 
         let exe_path = std::env::current_exe().unwrap_or_default();
-        let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let exe_dir = exe_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         let log_path = exe_dir.join("nekobeat_startup.log");
 
-        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).and_then(|mut f| {
-            use std::io::Write;
-            writeln!(f, "GStreamer audio thread initialized.")
-        });
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "GStreamer audio thread initialized.")
+            });
 
         use gstreamer::prelude::*;
         let playbin = match gstreamer::ElementFactory::make("playbin").build() {
@@ -242,8 +251,7 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
             "com.google.android.youtube/19.45.36 (Linux; U; Android 12) gzip";
         const YT_ANDROID_VR_UA: &str =
             "com.google.android.apps.youtube.vr.oculus/1.60.27 (Linux; U; Android 12; xx_XX; Quest 3; Build/SQ3A.220605.009.A1; Cronet/131.0.6778.135)";
-        const YT_TV_UA: &str =
-            "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version";
+        const YT_TV_UA: &str = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version";
         const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
         playbin.connect("source-setup", false, move |args| {
@@ -335,7 +343,7 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         // Low preroll — start audible ASAP; soup will keep filling behind
         playbin.set_property("buffer-size", &(256 * 1024i32));
         playbin.set_property("buffer-duration", &(800_000_000i64));
-        
+
         // User volume and ReplayGain stay separate. The pipeline receives their product,
         // so changing normalization never destroys the user's volume preference.
         let mut current_uri = String::new();
@@ -359,22 +367,26 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         let app_handle_for_bus = app_handle.clone();
 
         // Helper to handle state change errors without panicking
-        let set_state_safe = |element: &gstreamer::Element, state: gstreamer::State, app: &AppHandle| {
-            if let Err(err) = element.set_state(state) {
-                let err_msg = format!("GStreamer State Change Error ({:?}): {}", state, err);
-                eprintln!("{}", err_msg);
-                
-                // Also log to file for release debugging
-                let _ = std::fs::OpenOptions::new().append(true).open(&log_path).and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f, "{}", err_msg)
-                });
-                
-                let _ = app.emit("audio-error", err_msg);
-                return false;
-            }
-            true
-        };
+        let set_state_safe =
+            |element: &gstreamer::Element, state: gstreamer::State, app: &AppHandle| {
+                if let Err(err) = element.set_state(state) {
+                    let err_msg = format!("GStreamer State Change Error ({:?}): {}", state, err);
+                    eprintln!("{}", err_msg);
+
+                    // Also log to file for release debugging
+                    let _ = std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&log_path)
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(f, "{}", err_msg)
+                        });
+
+                    let _ = app.emit("audio-error", err_msg);
+                    return false;
+                }
+                true
+            };
 
         let mut pending_command = Some(first_play_command);
         loop {
@@ -432,9 +444,11 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
                             #[cfg(not(target_os = "android"))]
                             if (current_rate - 1.0).abs() > f64::EPSILON {
-                                if let Err(error) =
-                                    seek_with_rate(&playbin, std::time::Duration::ZERO, current_rate)
-                                {
+                                if let Err(error) = seek_with_rate(
+                                    &playbin,
+                                    std::time::Duration::ZERO,
+                                    current_rate,
+                                ) {
                                     eprintln!("GStreamer: Initial rate seek failed: {error}");
                                     current_rate = 1.0;
                                 }
@@ -446,12 +460,15 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                     }
                     AudioCommand::PlayUrl(url) => {
                         println!("GStreamer: Playing URL: {}", url);
-                        
+
                         // Log URI to startup log for debugging
-                        let _ = std::fs::OpenOptions::new().append(true).open(&log_path).and_then(|mut f| {
-                            use std::io::Write;
-                            writeln!(f, "GStreamer: Attempting to play URL: {}", url)
-                        });
+                        let _ = std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&log_path)
+                            .and_then(|mut f| {
+                                use std::io::Write;
+                                writeln!(f, "GStreamer: Attempting to play URL: {}", url)
+                            });
 
                         let _ = app_handle.emit("audio-buffering", true);
                         cached_pos = std::time::Duration::ZERO;
@@ -478,9 +495,11 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         if set_state_safe(&playbin, gstreamer::State::Playing, &app_handle) {
                             #[cfg(not(target_os = "android"))]
                             if (current_rate - 1.0).abs() > f64::EPSILON {
-                                if let Err(error) =
-                                    seek_with_rate(&playbin, std::time::Duration::ZERO, current_rate)
-                                {
+                                if let Err(error) = seek_with_rate(
+                                    &playbin,
+                                    std::time::Duration::ZERO,
+                                    current_rate,
+                                ) {
                                     eprintln!("GStreamer: Initial rate seek failed: {error}");
                                     current_rate = 1.0;
                                 }
@@ -525,7 +544,8 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         println!("GStreamer: State after resume: {:?}", state);
                         if state != gstreamer::State::Playing {
                             eprintln!("GStreamer: Not Playing after resume — forcing Playing");
-                            let _ = set_state_safe(&playbin, gstreamer::State::Playing, &app_handle);
+                            let _ =
+                                set_state_safe(&playbin, gstreamer::State::Playing, &app_handle);
                             playbin.set_property(
                                 "volume",
                                 output_volume(current_volume, current_replay_gain),
@@ -636,7 +656,9 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         eprintln!("{} (debug: {})", err_msg, debug);
                         let _ = playbin.set_state(gstreamer::State::Null);
                         let _ = app_handle_for_bus.emit("audio-buffering", false);
-                        let human = if debug.contains("reason error (-5)") || gst_err.contains("stream error") {
+                        let human = if debug.contains("reason error (-5)")
+                            || gst_err.contains("stream error")
+                        {
                             format!(
                                 "Playback failed (stream error). Try another source or track. ({})",
                                 gst_err
@@ -665,7 +687,11 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                         }
                     }
                     MessageView::StateChanged(state) => {
-                        if state.src().map(|s| s == playbin.upcast_ref::<gstreamer::Object>()).unwrap_or(false) {
+                        if state
+                            .src()
+                            .map(|s| s == playbin.upcast_ref::<gstreamer::Object>())
+                            .unwrap_or(false)
+                        {
                             if state.current() == gstreamer::State::Playing {
                                 let _ = app_handle_for_bus.emit("audio-buffering", false);
                                 let _ = app_handle_for_bus.emit("audio-ready", true);
@@ -684,11 +710,118 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
     }
 }
 
+#[cfg(target_os = "android")]
+pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
+    let (tx, rx) = channel::<AudioCommand>();
+    let tx_internal = tx.clone();
+    let play_generation = Arc::new(AtomicU64::new(0));
+
+    thread::spawn(move || {
+        let mut current_volume = 1.0;
+        let mut current_replay_gain = 1.0;
+        while let Ok(command) = rx.recv() {
+            let result = match command {
+                AudioCommand::Play(path) => {
+                    let result = crate::android_playback::play_local(&path);
+                    if result.is_ok() {
+                        let _ = app_handle.emit("audio-playing", path);
+                        let _ = app_handle.emit("audio-buffering", false);
+                        let _ = app_handle.emit("audio-ready", true);
+                    }
+                    result
+                }
+                AudioCommand::PlayUrl(_) => {
+                    Err("Online streaming is not supported by Android Media3 playback".into())
+                }
+                AudioCommand::Pause => crate::android_playback::pause(),
+                AudioCommand::Resume => crate::android_playback::resume(),
+                AudioCommand::Seek(position) => {
+                    crate::android_playback::seek(position.as_millis().min(u64::MAX as u128) as u64)
+                }
+                AudioCommand::SetVolume(volume) => {
+                    current_volume = volume.clamp(0.0, 1.0);
+                    crate::android_playback::set_volume(output_volume(
+                        current_volume,
+                        current_replay_gain,
+                    ))
+                }
+                AudioCommand::SetEqBand(_, _) => Ok(()),
+                AudioCommand::SetPlaybackRate(_, reply_tx) => {
+                    let error =
+                        "Playback-rate control is not supported by Android Media3 playback".into();
+                    let _ = reply_tx.send(Err(error));
+                    Ok(())
+                }
+                AudioCommand::SetReplayGain {
+                    mode,
+                    preamp_db,
+                    tags,
+                } => {
+                    current_replay_gain = replay_gain_multiplier(mode, preamp_db, tags);
+                    crate::android_playback::set_volume(output_volume(
+                        current_volume,
+                        current_replay_gain,
+                    ))
+                }
+                AudioCommand::GetPosition(reply_tx) => {
+                    match crate::android_playback::clock() {
+                        Ok(clock) => {
+                            let _ = reply_tx.send(clock.0);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            let _ = reply_tx.send(std::time::Duration::ZERO);
+                            Err(error)
+                        }
+                    }
+                }
+                AudioCommand::GetDuration(reply_tx) => {
+                    match crate::android_playback::clock() {
+                        Ok(clock) => {
+                            let _ = reply_tx.send(clock.1);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            let _ = reply_tx.send(std::time::Duration::ZERO);
+                            Err(error)
+                        }
+                    }
+                }
+                AudioCommand::GetClock(reply_tx) => {
+                    match crate::android_playback::clock() {
+                        Ok(clock) => {
+                            let _ = reply_tx.send(clock);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            let _ = reply_tx.send((
+                                std::time::Duration::ZERO,
+                                std::time::Duration::ZERO,
+                            ));
+                            Err(error)
+                        }
+                    }
+                }
+            };
+            if let Err(error) = result {
+                eprintln!("Media3: {error}");
+                let _ = app_handle.emit("audio-error", error);
+                let _ = app_handle.emit("audio-buffering", false);
+            }
+        }
+    });
+
+    AudioState {
+        tx: tx_internal,
+        play_generation,
+    }
+}
+
 #[tauri::command]
 pub async fn stream_external_audio(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AudioState>, 
-    url: String, 
+    state: tauri::State<'_, AudioState>,
+    url: String,
     source: String,
     title: Option<String>,
     artist: Option<String>,
@@ -711,16 +844,20 @@ pub async fn stream_external_audio(
                 return Err("Playback request superseded".into());
             }
             // Stay buffering until GStreamer Buffering bus clears it
-            
+
             // Check if this is a preview URL (SoundCloud restricted tracks)
-            let (actual_url, is_preview) = if let Some(preview_url) = resolved_url.strip_prefix("PREVIEW:") {
-                println!("Audio: Playing preview (30s) for restricted track");
-                let _ = app.emit("audio-preview", "This track is restricted by the distributor. Playing 30-second preview.");
-                (preview_url.to_string(), true)
-            } else {
-                (resolved_url.clone(), false)
-            };
-            
+            let (actual_url, is_preview) =
+                if let Some(preview_url) = resolved_url.strip_prefix("PREVIEW:") {
+                    println!("Audio: Playing preview (30s) for restricted track");
+                    let _ = app.emit(
+                        "audio-preview",
+                        "This track is restricted by the distributor. Playing 30-second preview.",
+                    );
+                    (preview_url.to_string(), true)
+                } else {
+                    (resolved_url.clone(), false)
+                };
+
             if actual_url.starts_with("file:") {
                 let path = url::Url::parse(&actual_url)
                     .ok()
@@ -742,9 +879,7 @@ pub async fn stream_external_audio(
                         #[cfg(not(windows))]
                         {
                             // file:///data/... → /data/... ; file:////data → collapse
-                            let rest = actual_url
-                                .strip_prefix("file://")
-                                .unwrap_or(&actual_url);
+                            let rest = actual_url.strip_prefix("file://").unwrap_or(&actual_url);
                             let normalized = rest.trim_start_matches('/');
                             Some(format!("/{}", normalized))
                         }
@@ -757,7 +892,10 @@ pub async fn stream_external_audio(
                     .map_err(|e| e.to_string())?;
                 let _ = app.emit("audio-buffering", false);
             } else {
-                state.tx.send(AudioCommand::PlayUrl(actual_url.clone())).map_err(|e| e.to_string())?;
+                state
+                    .tx
+                    .send(AudioCommand::PlayUrl(actual_url.clone()))
+                    .map_err(|e| e.to_string())?;
             }
             // Return PREVIEW: prefix so frontend knows
             if is_preview {
@@ -799,32 +937,55 @@ pub async fn prefetch_external_audio(
 
 #[tauri::command]
 pub fn play_audio(state: State<'_, AudioState>, path: String) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
     crate::path_util::resolve_playable_local_path(&path)?;
+    #[cfg(target_os = "android")]
+    if !is_android_local_source(&path) {
+        return Err(
+            "Android playback requires an absolute path, file:// URI, or content:// URI"
+                .to_string(),
+        );
+    }
     state.play_generation.fetch_add(1, Ordering::SeqCst);
-    state.tx.send(AudioCommand::Play(path)).map_err(|e| e.to_string())
+    state
+        .tx
+        .send(AudioCommand::Play(path))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn pause_audio(state: State<'_, AudioState>) -> Result<(), String> {
-    state.tx.send(AudioCommand::Pause).map_err(|e| e.to_string())
+    state
+        .tx
+        .send(AudioCommand::Pause)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn resume_audio(state: State<'_, AudioState>) -> Result<(), String> {
-    state.tx.send(AudioCommand::Resume).map_err(|e| e.to_string())
+    state
+        .tx
+        .send(AudioCommand::Resume)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn seek_audio(state: State<'_, AudioState>, position_ms: u64) -> Result<(), String> {
     let duration = std::time::Duration::from_millis(position_ms);
-    state.tx.send(AudioCommand::Seek(duration)).map_err(|e| e.to_string())
+    state
+        .tx
+        .send(AudioCommand::Seek(duration))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_audio_position(state: State<'_, AudioState>) -> Result<u64, String> {
     let (reply_tx, reply_rx) = channel();
-    state.tx.send(AudioCommand::GetPosition(reply_tx)).map_err(|e| e.to_string())?;
-    
+    state
+        .tx
+        .send(AudioCommand::GetPosition(reply_tx))
+        .map_err(|e| e.to_string())?;
+
     match reply_rx.recv_timeout(std::time::Duration::from_millis(50)) {
         Ok(duration) => Ok(duration.as_millis() as u64),
         Err(_) => Ok(0),
@@ -834,8 +995,11 @@ pub fn get_audio_position(state: State<'_, AudioState>) -> Result<u64, String> {
 #[tauri::command]
 pub fn get_audio_duration(state: State<'_, AudioState>) -> Result<u64, String> {
     let (reply_tx, reply_rx) = channel();
-    state.tx.send(AudioCommand::GetDuration(reply_tx)).map_err(|e| e.to_string())?;
-    
+    state
+        .tx
+        .send(AudioCommand::GetDuration(reply_tx))
+        .map_err(|e| e.to_string())?;
+
     match reply_rx.recv_timeout(std::time::Duration::from_millis(50)) {
         Ok(duration) => Ok(duration.as_millis() as u64),
         Err(_) => Ok(0),
@@ -851,7 +1015,10 @@ pub struct AudioClock {
 #[tauri::command]
 pub fn get_audio_clock(state: State<'_, AudioState>) -> Result<AudioClock, String> {
     let (reply_tx, reply_rx) = channel();
-    state.tx.send(AudioCommand::GetClock(reply_tx)).map_err(|e| e.to_string())?;
+    state
+        .tx
+        .send(AudioCommand::GetClock(reply_tx))
+        .map_err(|e| e.to_string())?;
 
     match reply_rx.recv_timeout(std::time::Duration::from_millis(300)) {
         Ok((pos, dur)) => Ok(AudioClock {
@@ -866,12 +1033,18 @@ pub fn get_audio_clock(state: State<'_, AudioState>) -> Result<AudioClock, Strin
 }
 #[tauri::command]
 pub fn set_volume(state: State<'_, AudioState>, volume: f64) -> Result<(), String> {
-    state.tx.send(AudioCommand::SetVolume(volume)).map_err(|e| e.to_string())
+    state
+        .tx
+        .send(AudioCommand::SetVolume(volume))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn set_eq_band(state: State<'_, AudioState>, band: u32, gain: f64) -> Result<(), String> {
-    state.tx.send(AudioCommand::SetEqBand(band, gain)).map_err(|e| e.to_string())
+    state
+        .tx
+        .send(AudioCommand::SetEqBand(band, gain))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -911,9 +1084,8 @@ pub fn get_playback_capabilities() -> PlaybackCapabilities {
     #[cfg(target_os = "android")]
     let (replay_gain_filter_available, pitch_element_available) = (false, false);
     #[cfg(not(target_os = "android"))]
-    let replay_gain_filter_available =
-        gstreamer::ElementFactory::find("rgvolume").is_some()
-            && gstreamer::ElementFactory::find("rglimiter").is_some();
+    let replay_gain_filter_available = gstreamer::ElementFactory::find("rgvolume").is_some()
+        && gstreamer::ElementFactory::find("rglimiter").is_some();
     #[cfg(not(target_os = "android"))]
     let pitch_element_available = gstreamer::ElementFactory::find("pitch").is_some()
         || gstreamer::ElementFactory::find("rubberband").is_some();
@@ -929,7 +1101,7 @@ pub fn get_playback_capabilities() -> PlaybackCapabilities {
         replay_gain_filter_available,
         pitch: false,
         pitch_element_available,
-        mobile_controls: false,
+        mobile_controls: cfg!(target_os = "android"),
     }
 }
 
@@ -984,5 +1156,17 @@ mod tests {
         assert!((output_volume(0.5, 1.5) - 0.75).abs() < 1e-9);
         assert_eq!(output_volume(-1.0, 2.0), 0.0);
         assert_eq!(output_volume(2.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn android_local_source_accepts_supported_uri_schemes() {
+        assert!(is_android_local_source(
+            "content://media/external/audio/42"
+        ));
+        assert!(is_android_local_source(
+            "file:///storage/emulated/0/Music/song.flac"
+        ));
+        assert!(!is_android_local_source("https://example.com/song.mp3"));
+        assert!(!is_android_local_source("relative/song.mp3"));
     }
 }

@@ -320,6 +320,8 @@ jobs:
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "$root\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           choco install pkgconfiglite -y --no-progress
+          # Bundle resources — gstreamer/ is gitignored; stage from MSI install
+          & .\scripts\stage-gstreamer-windows.ps1 -GstRoot $root
           Write-Host "GStreamer Windows setup OK"
       - name: Fetch yt-dlp + chmod sidecars (Linux / macOS)
         if: matrix.platform != 'windows-latest'
@@ -432,32 +434,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config unzip curl xz-utils
 
-      - name: Download GStreamer Android universal SDK
+      - name: Configure Android SDK path
         run: |
           set -euo pipefail
-          VER=1.28.4
-          URL="https://gstreamer.freedesktop.org/data/pkg/android/${VER}/gstreamer-1.0-android-universal-${VER}.tar.xz"
-          mkdir -p "$GITHUB_WORKSPACE/vendor"
-          curl -fsSL --retry 3 -o /tmp/gst-android.tar.xz "$URL"
-          # Tarball top-level is arm64/ armv7/ x86/ x86_64/
-          tar -xJf /tmp/gst-android.tar.xz -C "$GITHUB_WORKSPACE/vendor"
-          test -d "$GITHUB_WORKSPACE/vendor/arm64"
-          test -f "$GITHUB_WORKSPACE/vendor/arm64/lib/libgstreamer-1.0.a"
-          test -f "$GITHUB_WORKSPACE/vendor/arm64/include/gstreamer-1.0/gst/gst.h"
-          echo "GSTREAMER_ROOT_ANDROID=$GITHUB_WORKSPACE/vendor" >> "$GITHUB_ENV"
-          # sdk.dir only — do NOT set ndk.dir (conflicts with android.ndkVersion → CXX1104)
           mkdir -p src-tauri/gen/android
           echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
-          # Clear machine-local Windows gst path from committed gradle.properties
           sed -i '/^gstAndroidRoot=/d' src-tauri/gen/android/gradle.properties || true
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
-
-      - name: Apply CI Android cargo/pkg-config env
-        run: bash scripts/ci-android-env.sh
-
-      - name: Prebuild libgstreamer_android.so (Cerbero ndk-build)
-        run: bash scripts/ci-build-gstreamer-android.sh
 
       - name: Install frontend deps
         run: npm ci
@@ -465,22 +447,9 @@ jobs:
       - name: Ensure Android project (gen/)
         run: |
           if [ ! -f src-tauri/gen/android/app/build.gradle.kts ]; then
-            echo "::error::src-tauri/gen/android is missing. Commit the patched Android project (GStreamer ndkBuild wiring)."
+            echo "::error::src-tauri/gen/android is missing. Commit the patched Media3 Android project."
             exit 1
           fi
-
-      - name: Fetch Android ffmpeg + yt-dlp
-        run: bash scripts/fetch-android-native-tools.sh
-
-      - name: Sync Android sidecars into jniLibs
-        run: |
-          bash scripts/sync-android-sidecars.sh
-          # Umbrella lives in gen jniLibs; link/ is for cargo; marker skips Cerbero/PREBUILT
-          test -f src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libgstreamer_android.so
-          test -f src-tauri/android-gst/link/arm64-v8a/libgstreamer_android.so
-          test -f src-tauri/android-gst/libs/arm64-v8a/.use_prebuilt_gst
-          # Must not also sit under android-gst/libs (Duplicate resources vs jniLibs)
-          test ! -f src-tauri/android-gst/libs/arm64-v8a/libgstreamer_android.so
 
       - name: Sync Android launcher icons (brand)
         run: bash scripts/sync-android-icons.sh
@@ -495,7 +464,6 @@ jobs:
 
       - name: Build Android APK (aarch64)
         env:
-          GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
           PKG_CONFIG_SYSROOT_DIR: ''
           PKG_CONFIG_PATH: ''
         run: npm run tauri:android:build
@@ -516,6 +484,7 @@ jobs:
             fi
             "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk" || \
               "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+            bash scripts/verify-android-media3-apk.sh "$apk"
           done
 
       - name: Stage APK into release/ (same folder as desktop assets)

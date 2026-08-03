@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use tauri::{Manager, Emitter};
+use tauri::{Emitter, Manager};
 use tokio::process::Command;
 
 fn liked_backfill_attempted() -> &'static Mutex<HashSet<String>> {
@@ -29,7 +29,10 @@ pub struct LikedTrack {
 }
 
 pub fn get_liked_dir(app: &tauri::AppHandle) -> PathBuf {
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let liked_dir = app_dir.join("nekobeat_liked_audio");
     if !liked_dir.exists() {
         let _ = fs::create_dir_all(&liked_dir);
@@ -327,7 +330,10 @@ fn update_liked_artwork_path(registry_path: &Path, track_id: &str, local_path: &
     let mut tracks: Vec<LikedTrack> = serde_json::from_str(&content).unwrap_or_else(|_| vec![]);
     if let Some(t) = tracks.iter_mut().find(|t| t.id == track_id) {
         t.local_artwork_path = Some(local_path.to_string_lossy().into_owned());
-        if let Err(e) = fs::write(registry_path, serde_json::to_string_pretty(&tracks).unwrap()) {
+        if let Err(e) = fs::write(
+            registry_path,
+            serde_json::to_string_pretty(&tracks).unwrap(),
+        ) {
             eprintln!("Offline: Failed to update local_artwork_path: {}", e);
         }
     }
@@ -342,7 +348,10 @@ fn update_liked_lyrics_text(registry_path: &Path, track_id: &str, lyrics: &str) 
     let mut tracks: Vec<LikedTrack> = serde_json::from_str(&content).unwrap_or_else(|_| vec![]);
     if let Some(t) = tracks.iter_mut().find(|t| t.id == track_id) {
         t.local_lyrics = Some(lyrics.to_string());
-        if let Err(e) = fs::write(registry_path, serde_json::to_string_pretty(&tracks).unwrap()) {
+        if let Err(e) = fs::write(
+            registry_path,
+            serde_json::to_string_pretty(&tracks).unwrap(),
+        ) {
             eprintln!("Offline: Failed to update local_lyrics: {}", e);
         } else {
             println!("Offline: Cached lyrics for {}", track_id);
@@ -417,7 +426,11 @@ fn get_yt_dlp_path() -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: Option<String>) -> Result<bool, String> {
+pub async fn toggle_like(
+    app: tauri::AppHandle,
+    mut track: LikedTrack,
+    lyrics: Option<String>,
+) -> Result<bool, String> {
     let liked_dir = get_liked_dir(&app);
     let registry_path = get_registry_path(&app);
 
@@ -438,7 +451,10 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
             let path = PathBuf::from(local_path);
             if path.exists() {
                 if let Err(e) = fs::remove_file(&path) {
-                    eprintln!("Offline: Failed to remove file {:?}: {}. Spawning retry task.", path, e);
+                    eprintln!(
+                        "Offline: Failed to remove file {:?}: {}. Spawning retry task.",
+                        path, e
+                    );
                     // Only delete later if the track is still unliked (don't wipe a re-like).
                     let retry_path = path.clone();
                     let retry_id = existing_track.id.clone();
@@ -460,7 +476,10 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                                 break;
                             }
                             if fs::remove_file(&retry_path).is_ok() {
-                                println!("Offline: Successfully deleted locked file {:?} after retries.", retry_path);
+                                println!(
+                                    "Offline: Successfully deleted locked file {:?} after retries.",
+                                    retry_path
+                                );
                                 break;
                             }
                         }
@@ -476,12 +495,17 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
         if let Some(art) = &existing_track.local_artwork_path {
             let _ = fs::remove_file(art);
         }
-        let safe_id = existing_track.id.replace(|c: char| !c.is_alphanumeric(), "_");
+        let safe_id = existing_track
+            .id
+            .replace(|c: char| !c.is_alphanumeric(), "_");
         for ext in &["jpg", "jpeg", "png", "webp", "gif", "lrc"] {
             let p = liked_dir.join(format!("nekobeat_liked_{}.{}", safe_id, ext));
             let _ = fs::remove_file(p);
         }
-        match fs::write(&registry_path, serde_json::to_string_pretty(&tracks).unwrap()) {
+        match fs::write(
+            &registry_path,
+            serde_json::to_string_pretty(&tracks).unwrap(),
+        ) {
             Ok(_) => println!("Offline: Registry updated after unlike"),
             Err(e) => eprintln!("Offline: Failed to update registry: {}", e),
         }
@@ -489,13 +513,16 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
     } else {
         // Like: Save metadata immediately, then download in background
         let app_handle = app.clone();
-        
+
         track.local_lyrics = lyrics;
 
         // Save to registry immediately so the track appears in Liked list right away
         tracks.push(track.clone());
-        fs::write(&registry_path, serde_json::to_string_pretty(&tracks).unwrap())
-            .map_err(|e| format!("Failed to save liked registry: {}", e))?;
+        fs::write(
+            &registry_path,
+            serde_json::to_string_pretty(&tracks).unwrap(),
+        )
+        .map_err(|e| format!("Failed to save liked registry: {}", e))?;
         let _ = app_handle.emit("liked-track-downloaded", ());
 
         // Background: art + lyrics + audio so Liked works fully offline
@@ -505,7 +532,9 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
 
             // Artwork (fast, independent of audio)
             if track.artwork_url.starts_with("http") {
-                if let Some(art_path) = download_liked_artwork(&track.artwork_url, &output_base).await {
+                if let Some(art_path) =
+                    download_liked_artwork(&track.artwork_url, &output_base).await
+                {
                     update_liked_artwork_path(&registry_path, &track.id, &art_path);
                     let _ = app_handle.emit("liked-track-downloaded", ());
                 }
@@ -521,19 +550,31 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                 fetch_and_store_liked_lyrics(&app_handle, &track).await;
                 let _ = app_handle.emit("liked-track-downloaded", ());
             }
-            
+
             // Build the URL to resolve
             let source_url = if track.source == "youtube" {
-                format!("https://www.youtube.com/watch?v={}", track.id.replace("yt-", ""))
+                format!(
+                    "https://www.youtube.com/watch?v={}",
+                    track.id.replace("yt-", "")
+                )
             } else if track.source == "soundcloud" {
-                format!("https://api-v2.soundcloud.com/tracks/{}", track.id.replace("sc-", ""))
+                format!(
+                    "https://api-v2.soundcloud.com/tracks/{}",
+                    track.id.replace("sc-", "")
+                )
             } else if track.source == "spotify" {
-                format!("https://open.spotify.com/track/{}", track.id.replace("sp-", ""))
+                format!(
+                    "https://open.spotify.com/track/{}",
+                    track.id.replace("sp-", "")
+                )
             } else {
                 track.stream_url.clone().unwrap_or_else(|| track.id.clone())
             };
 
-            println!("Offline: Downloading '{}' from {} ...", track.title, track.source);
+            println!(
+                "Offline: Downloading '{}' from {} ...",
+                track.title, track.source
+            );
 
             // Helper: copy a local source file into liked_audio and register it
             let copy_into_liked = |source_file: &PathBuf| -> bool {
@@ -583,6 +624,65 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                 }
             }
 
+            // Step 1b (Android): content:// — copy via ContentResolver into liked storage
+            #[cfg(target_os = "android")]
+            {
+                if let Some(uri) = track
+                    .stream_url
+                    .as_deref()
+                    .filter(|u| u.starts_with("content:"))
+                {
+                    match crate::android_content::materialize_content_uri(uri, &liked_dir) {
+                        Ok(path) => {
+                            if copy_into_liked(&path) {
+                                let _ = fs::remove_file(&path);
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Offline: content:// materialize failed: {}", e);
+                        }
+                    }
+                }
+                // Also try id when it is a content URI (local library rows)
+                if track.id.starts_with("content:") {
+                    match crate::android_content::materialize_content_uri(&track.id, &liked_dir) {
+                        Ok(path) => {
+                            if copy_into_liked(&path) {
+                                let _ = fs::remove_file(&path);
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Offline: content:// id materialize failed: {}", e);
+                        }
+                    }
+                }
+            }
+
+            // Local library likes are already in the registry — don't try network resolve on a path/URI
+            let looks_local = track.source == "local"
+                || track.id.starts_with("content:")
+                || track.id.starts_with("file:")
+                || track.id.starts_with('/')
+                || track
+                    .stream_url
+                    .as_deref()
+                    .map(|u| {
+                        u.starts_with("content:")
+                            || u.starts_with("file:")
+                            || u.starts_with('/')
+                            || PathBuf::from(u).is_file()
+                    })
+                    .unwrap_or(false);
+            if looks_local {
+                println!(
+                    "Offline: Liked local track '{}' stays on metadata (audio copy done or source unavailable)",
+                    track.title
+                );
+                return;
+            }
+
             // Step 2: Resolve with title/artist so YouTube match isn't a random same-named song
             let resolved = crate::aggregator::resolver::resolve_url(
                 &app_handle,
@@ -591,7 +691,7 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                 Some(track.artist.as_str()),
             )
             .await;
-            
+
             match resolved {
                 Ok(resolved_url) => {
                     if let Some(source_file) = local_path_from_stream_url(Some(&resolved_url)) {
@@ -599,9 +699,12 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                             return;
                         }
                     }
-                    
+
                     // It's an HTTP URL — download with reqwest
-                    println!("Offline: Downloading from HTTP: {}...", &resolved_url[..std::cmp::min(resolved_url.len(), 80)]);
+                    println!(
+                        "Offline: Downloading from HTTP: {}...",
+                        &resolved_url[..std::cmp::min(resolved_url.len(), 80)]
+                    );
                     let ua = if resolved_url.contains("googlevideo.com") {
                         "com.google.android.youtube/19.45.36 (Linux; U; Android 12) gzip"
                     } else {
@@ -614,11 +717,14 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                             Ok(resp) => {
                                 if resp.status().is_success() {
                                     // Determine file extension from content-type
-                                    let content_type = resp.headers()
+                                    let content_type = resp
+                                        .headers()
                                         .get("content-type")
                                         .and_then(|v| v.to_str().ok())
                                         .unwrap_or("");
-                                    let ext = if content_type.contains("mp4") || content_type.contains("m4a") {
+                                    let ext = if content_type.contains("mp4")
+                                        || content_type.contains("m4a")
+                                    {
                                         "m4a"
                                     } else if content_type.contains("webm") {
                                         "webm"
@@ -629,10 +735,15 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                                     } else {
                                         "mp3"
                                     };
-                                    
-                                    let final_path = PathBuf::from(format!("{}.{}", output_base.to_string_lossy(), ext));
 
-                                    if let Ok(mut file) = tokio::fs::File::create(&final_path).await {
+                                    let final_path = PathBuf::from(format!(
+                                        "{}.{}",
+                                        output_base.to_string_lossy(),
+                                        ext
+                                    ));
+
+                                    if let Ok(mut file) = tokio::fs::File::create(&final_path).await
+                                    {
                                         let mut stream = resp.bytes_stream();
                                         let mut total: u64 = 0;
                                         use futures::StreamExt;
@@ -652,8 +763,15 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                                             }
                                         }
                                         if total > 0 {
-                                            println!("Offline: Streamed {} bytes -> {:?}", total, final_path);
-                                            update_liked_local_path(&registry_path, &track.id, &final_path);
+                                            println!(
+                                                "Offline: Streamed {} bytes -> {:?}",
+                                                total, final_path
+                                            );
+                                            update_liked_local_path(
+                                                &registry_path,
+                                                &track.id,
+                                                &final_path,
+                                            );
                                             let _ = app_handle.emit("liked-track-downloaded", ());
                                             return;
                                         }
@@ -662,7 +780,10 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                                         eprintln!("Offline: Failed to create output file");
                                     }
                                 } else {
-                                    eprintln!("Offline: HTTP download failed with status {}", resp.status());
+                                    eprintln!(
+                                        "Offline: HTTP download failed with status {}",
+                                        resp.status()
+                                    );
                                 }
                             }
                             Err(e) => eprintln!("Offline: HTTP request failed: {}", e),
@@ -671,7 +792,7 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                 }
                 Err(e) => {
                     eprintln!("Offline: Resolver failed: {}. Trying yt-dlp fallback...", e);
-                    
+
                     // Step 3: Last resort — try yt-dlp if available
                     if let Ok(ytdlp_path) = get_yt_dlp_path() {
                         let mut cmd = Command::new(&ytdlp_path);
@@ -686,14 +807,22 @@ pub async fn toggle_like(app: tauri::AppHandle, mut track: LikedTrack, lyrics: O
                             std::time::Duration::from_secs(180),
                         )
                         .await;
-                        
+
                         if let Ok(cmd_out) = output {
                             if cmd_out.status.success() {
                                 for ext in &["m4a", "webm", "mp3", "opus"] {
-                                    let possible = PathBuf::from(format!("{}.{}", output_base.to_string_lossy(), ext));
+                                    let possible = PathBuf::from(format!(
+                                        "{}.{}",
+                                        output_base.to_string_lossy(),
+                                        ext
+                                    ));
                                     if possible.exists() {
                                         println!("Offline: yt-dlp downloaded -> {:?}", possible);
-                                        update_liked_local_path(&registry_path, &track.id, &possible);
+                                        update_liked_local_path(
+                                            &registry_path,
+                                            &track.id,
+                                            &possible,
+                                        );
                                         let _ = app_handle.emit("liked-track-downloaded", ());
                                         return;
                                     }
@@ -715,30 +844,40 @@ fn update_liked_local_path(registry_path: &Path, track_id: &str, local_path: &Pa
     let mut tracks: Vec<LikedTrack> = serde_json::from_str(&content).unwrap_or_else(|_| vec![]);
     if let Some(t) = tracks.iter_mut().find(|t| t.id == track_id) {
         t.local_audio_path = Some(local_path.to_string_lossy().into_owned());
-        if let Err(e) = fs::write(registry_path, serde_json::to_string_pretty(&tracks).unwrap()) {
+        if let Err(e) = fs::write(
+            registry_path,
+            serde_json::to_string_pretty(&tracks).unwrap(),
+        ) {
             eprintln!("Offline: Failed to update local_audio_path: {}", e);
         } else {
-            println!("Offline: Updated local_audio_path for {} -> {:?}", track_id, local_path);
+            println!(
+                "Offline: Updated local_audio_path for {} -> {:?}",
+                track_id, local_path
+            );
         }
     }
 }
 
 /// Public helper for Spotify hybrid HiFi cache → liked registry sync
-pub fn update_local_audio_path_for_track(app: &tauri::AppHandle, track_id: &str, local_path: &Path) {
+pub fn update_local_audio_path_for_track(
+    app: &tauri::AppHandle,
+    track_id: &str,
+    local_path: &Path,
+) {
     let registry_path = get_registry_path(app);
     update_liked_local_path(&registry_path, track_id, local_path);
 }
 
 /// Copy a correctly resolved audio file into the liked_audio dir (overwrites bad YT matches).
-pub fn replace_liked_audio_file(app: &tauri::AppHandle, track_id: &str, source: &Path) -> Option<PathBuf> {
+pub fn replace_liked_audio_file(
+    app: &tauri::AppHandle,
+    track_id: &str,
+    source: &Path,
+) -> Option<PathBuf> {
     if !source.is_file() {
         return None;
     }
-    let liked_dir = app
-        .path()
-        .app_data_dir()
-        .ok()?
-        .join("nekobeat_liked_audio");
+    let liked_dir = app.path().app_data_dir().ok()?.join("nekobeat_liked_audio");
     let _ = fs::create_dir_all(&liked_dir);
     let safe_id = track_id.replace(|c: char| !c.is_alphanumeric(), "_");
     let ext = source
@@ -773,14 +912,19 @@ pub fn replace_liked_audio_file(app: &tauri::AppHandle, track_id: &str, source: 
 
 /// Check if a downloaded audio file exists on disk for this track ID
 #[tauri::command]
-pub async fn check_liked_cache(app: tauri::AppHandle, track_id: String) -> Result<Option<String>, String> {
-    let liked_dir = app.path().app_data_dir()
+pub async fn check_liked_cache(
+    app: tauri::AppHandle,
+    track_id: String,
+) -> Result<Option<String>, String> {
+    let liked_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("nekobeat_liked_audio");
-    
+
     let safe_id = track_id.replace(|c: char| !c.is_alphanumeric(), "_");
     let base = format!("nekobeat_liked_{}", safe_id);
-    
+
     for ext in &["flac", "m4a", "webm", "opus", "ogg", "mp3", "wav"] {
         let path = liked_dir.join(format!("{}.{}", base, ext));
         if path.exists() {
@@ -807,8 +951,14 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn convert_srt_vtt_to_lrc(content: String) -> String {
     let mut lrc = String::new();
-    let re_srt = regex::Regex::new(r"(\d+)\s+(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s+([\s\S]*?)(?:\n\n|\z)").unwrap();
-    let re_vtt = regex::Regex::new(r"(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\s+([\s\S]*?)(?:\n\n|\z)").unwrap();
+    let re_srt = regex::Regex::new(
+        r"(\d+)\s+(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s+([\s\S]*?)(?:\n\n|\z)",
+    )
+    .unwrap();
+    let re_vtt = regex::Regex::new(
+        r"(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\s+([\s\S]*?)(?:\n\n|\z)",
+    )
+    .unwrap();
 
     // Try SRT first
     let mut found = false;
@@ -833,7 +983,11 @@ pub fn convert_srt_vtt_to_lrc(content: String) -> String {
         }
     }
 
-    if lrc.is_empty() { content.to_string() } else { lrc }
+    if lrc.is_empty() {
+        content.to_string()
+    } else {
+        lrc
+    }
 }
 
 fn format_lrc_time(time_str: &str) -> Option<String> {
@@ -846,7 +1000,7 @@ fn format_lrc_time(time_str: &str) -> Option<String> {
         if secs_parts.len() == 2 {
             let secs: u32 = secs_parts[0].parse().unwrap_or(0);
             let ms: u32 = secs_parts[1].parse().unwrap_or(0);
-            
+
             let total_mins = hrs * 60 + mins;
             let centisecs = ms / 10;
             return Some(format!("{:02}:{:02}.{:02}", total_mins, secs, centisecs));
@@ -856,14 +1010,19 @@ fn format_lrc_time(time_str: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn update_track_lyrics(app: tauri::AppHandle, track_id: String, filepath: Option<String>, lyrics: String) -> Result<(), String> {
+pub async fn update_track_lyrics(
+    app: tauri::AppHandle,
+    track_id: String,
+    filepath: Option<String>,
+    lyrics: String,
+) -> Result<(), String> {
     let processed_lyrics = if lyrics.contains("-->") {
         convert_srt_vtt_to_lrc(lyrics.clone())
     } else {
         lyrics
     };
 
-    // Harmonoid-style: always mirror into Lyrics/<hash>.lrc
+    // Always mirror into Lyrics/<hash>.lrc
     let cache_key = filepath
         .clone()
         .filter(|p| !p.trim().is_empty())
@@ -893,11 +1052,16 @@ pub async fn update_track_lyrics(app: tauri::AppHandle, track_id: String, filepa
     let registry_path = get_registry_path(&app);
     if registry_path.exists() {
         let content = fs::read_to_string(&registry_path).map_err(|e| e.to_string())?;
-        let mut tracks: Vec<LikedTrack> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-        
+        let mut tracks: Vec<LikedTrack> =
+            serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
         if let Some(track) = tracks.iter_mut().find(|t| t.id == track_id) {
             track.local_lyrics = Some(processed_lyrics);
-            fs::write(&registry_path, serde_json::to_string_pretty(&tracks).unwrap()).map_err(|e| e.to_string())?;
+            fs::write(
+                &registry_path,
+                serde_json::to_string_pretty(&tracks).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
             println!("Offline: Updated liked track lyrics for id {}", track_id);
             return Ok(());
         }

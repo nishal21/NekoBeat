@@ -31,7 +31,7 @@ pub fn set_discord_activity(
         let state_str = format!("by {}", artist);
 
         let mut assets = activity::Assets::new().large_text(&title);
-        
+
         // Use external artwork URL if provided, fallback to the generic asset name
         if let Some(url) = artwork_url.as_deref().filter(|s| !s.is_empty()) {
             assets = assets.large_image(url);
@@ -46,7 +46,10 @@ pub fn set_discord_activity(
 
         if duration_ms > 0 {
             // Calculate end timestamp
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let end_timestamp = now + (duration_ms / 1000);
             payload = payload.timestamps(activity::Timestamps::new().end(end_timestamp as i64));
         }

@@ -1,6 +1,4 @@
-//! JNI bridge to Android's native MediaSession foreground service.
-//!
-//! The service presents controls only; Rust/GStreamer remains the audio engine.
+//! JNI bridge to Android's Media3 ExoPlayer foreground service.
 
 #![cfg(target_os = "android")]
 
@@ -40,6 +38,80 @@ where
     f(&mut env, context)
 }
 
+/// Native threads cannot use JNI FindClass for app classes. Load through the app ClassLoader.
+fn load_app_class<'local>(
+    env: &mut jni::JNIEnv<'local>,
+    context: &JObject<'_>,
+    binary_name: &str,
+) -> Result<jni::objects::JClass<'local>, String> {
+    let loader = env
+        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .map_err(|e| format!("getClassLoader: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let name = env
+        .new_string(binary_name)
+        .map_err(|e| format!("class name: {e}"))?;
+    let class = env
+        .call_method(
+            &loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&name)],
+        )
+        .map_err(|e| format!("loadClass({binary_name}): {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    Ok(jni::objects::JClass::from(class))
+}
+
+fn call_app_static<'local>(
+    env: &mut jni::JNIEnv<'local>,
+    context: &JObject<'_>,
+    binary_name: &str,
+    method: &str,
+    sig: &str,
+    args: &[JValue<'_, '_>],
+) -> Result<jni::objects::JValueOwned<'local>, String> {
+    let class = load_app_class(env, context, binary_name)?;
+    env.call_static_method(class, method, sig, args)
+        .map_err(|e| format!("{binary_name}.{method}: {e}"))
+}
+
+fn call_playback_static<'local>(
+    env: &mut jni::JNIEnv<'local>,
+    context: &JObject<'_>,
+    method: &str,
+    sig: &str,
+    args: &[JValue<'_, '_>],
+) -> Result<jni::objects::JValueOwned<'local>, String> {
+    call_app_static(
+        env,
+        context,
+        "com.nishal21.nekobeat.PlaybackService",
+        method,
+        sig,
+        args,
+    )
+}
+
+fn call_main_activity_static<'local>(
+    env: &mut jni::JNIEnv<'local>,
+    context: &JObject<'_>,
+    method: &str,
+    sig: &str,
+    args: &[JValue<'_, '_>],
+) -> Result<jni::objects::JValueOwned<'local>, String> {
+    call_app_static(
+        env,
+        context,
+        "com.nishal21.nekobeat.MainActivity",
+        method,
+        sig,
+        args,
+    )
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AndroidCapabilityCheck {
@@ -70,13 +142,13 @@ fn check(available: bool, required: bool, detail: impl Into<String>) -> AndroidC
 
 fn foreground_media_session_available() -> Result<bool, String> {
     with_activity_env(|env, context| {
-        env.call_static_method(
-            "com/nishal21/nekobeat/MainActivity",
+        call_main_activity_static(
+            env,
+            &context,
             "mediaSessionSupport",
             "(Landroid/content/Context;)Z",
             &[JValue::Object(&context)],
-        )
-        .map_err(|e| format!("MainActivity.mediaSessionSupport: {e}"))?
+        )?
         .z()
         .map_err(|e| e.to_string())
     })
@@ -85,14 +157,6 @@ fn foreground_media_session_available() -> Result<bool, String> {
 /// Local, non-network capability probe used to decide whether Android Browse may be enabled.
 #[tauri::command]
 pub async fn android_streaming_capabilities() -> AndroidStreamingCapabilities {
-    let gst_result = gstreamer::init();
-    let gst_available = gst_result.is_ok();
-    let playbin_available = gst_available && gstreamer::ElementFactory::find("playbin").is_some();
-    let network_factories: Vec<&str> = ["souphttpsrc", "curlhttpsrc"]
-        .into_iter()
-        .filter(|name| gstreamer::ElementFactory::find(name).is_some())
-        .collect();
-    let network_available = !network_factories.is_empty();
     let resolver = crate::android_bin::find_ytdlp();
     let resolver_probe = match &resolver {
         Ok(path) => {
@@ -110,33 +174,15 @@ pub async fn android_streaming_capabilities() -> AndroidStreamingCapabilities {
     let media_session_available = media_session.as_ref().copied().unwrap_or(false);
 
     let gstreamer = check(
-        gst_available,
-        true,
-        match gst_result {
-            Ok(()) => "GStreamer initialized".to_string(),
-            Err(error) => format!("GStreamer initialization failed: {error}"),
-        },
+        false,
+        false,
+        "Not used: Android local playback is owned by Media3 ExoPlayer",
     );
-    let playbin = check(
-        playbin_available,
-        true,
-        if playbin_available {
-            "playbin factory is registered"
-        } else {
-            "playbin factory is missing"
-        },
-    );
+    let playbin = check(false, false, "Not used on Android");
     let network_source = check(
-        network_available,
-        true,
-        if network_available {
-            format!(
-                "Network source registered: {}",
-                network_factories.join(", ")
-            )
-        } else {
-            "No GStreamer HTTP source is registered".to_string()
-        },
+        false,
+        false,
+        "Online playback is intentionally unsupported by the Android Media3 transport",
     );
     let resolver_bridge = check(
         resolver_available,
@@ -177,7 +223,7 @@ pub async fn android_streaming_capabilities() -> AndroidStreamingCapabilities {
             Err(error) => error,
         },
     );
-    let platform = check(true, true, "Running on Android");
+    let platform = check(true, true, "Running on Android with Media3 local playback");
     let ready = [
         &platform,
         &gstreamer,
@@ -293,16 +339,15 @@ pub async fn android_streaming_smoke_test() -> Result<AndroidStreamingDiagnostic
 #[tauri::command]
 pub fn get_android_permission_status() -> Result<AndroidPermissionStatus, String> {
     with_activity_env(|env, context| {
-        let value = env
-            .call_static_method(
-                "com/nishal21/nekobeat/MainActivity",
-                "permissionStatus",
-                "(Landroid/content/Context;)Ljava/lang/String;",
-                &[JValue::Object(&context)],
-            )
-            .map_err(|e| format!("MainActivity.permissionStatus: {e}"))?
-            .l()
-            .map_err(|e| e.to_string())?;
+        let value = call_main_activity_static(
+            env,
+            &context,
+            "permissionStatus",
+            "(Landroid/content/Context;)Ljava/lang/String;",
+            &[JValue::Object(&context)],
+        )?
+        .l()
+        .map_err(|e| e.to_string())?;
         let value = JString::from(value);
         let json: String = env.get_string(&value).map_err(|e| e.to_string())?.into();
         serde_json::from_str(&json).map_err(|e| format!("permission status JSON: {e}"))
@@ -313,28 +358,150 @@ pub fn get_android_permission_status() -> Result<AndroidPermissionStatus, String
 pub fn request_android_permission(kind: String) -> Result<bool, String> {
     with_activity_env(|env, context| {
         let kind = env.new_string(kind).map_err(|e| e.to_string())?;
-        env.call_static_method(
-            "com/nishal21/nekobeat/MainActivity",
+        call_main_activity_static(
+            env,
+            &context,
             "requestPermission",
             "(Landroid/content/Context;Ljava/lang/String;)Z",
             &[JValue::Object(&context), JValue::Object(&kind)],
-        )
-        .map_err(|e| format!("MainActivity.requestPermission: {e}"))?
+        )?
         .z()
         .map_err(|e| e.to_string())
     })
 }
 
-#[tauri::command]
-pub fn start_android_playback_service() -> Result<(), String> {
+fn returned_string(
+    env: &mut jni::JNIEnv,
+    value: JObject,
+    operation: &str,
+) -> Result<String, String> {
+    let value = JString::from(value);
+    env.get_string(&value)
+        .map(Into::into)
+        .map_err(|error| format!("{operation}: {error}"))
+}
+
+pub(crate) fn play_local(source: &str) -> Result<(), String> {
     with_activity_env(|env, context| {
-        env.call_static_method(
-            "com/nishal21/nekobeat/PlaybackService",
-            "start",
+        let source = env.new_string(source).map_err(|error| error.to_string())?;
+        let result = call_playback_static(
+            env,
+            &context,
+            "play",
+            "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&context), JValue::Object(&source)],
+        )?
+        .l()
+        .map_err(|error| error.to_string())?;
+        let error = returned_string(env, result, "PlaybackService.play result")?;
+        if error.is_empty() {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })
+}
+
+fn transport_bool(method: &str) -> Result<(), String> {
+    with_activity_env(|env, context| {
+        let accepted = call_playback_static(env, &context, method, "()Z", &[])?
+            .z()
+            .map_err(|error| error.to_string())?;
+        if accepted {
+            Ok(())
+        } else {
+            Err("Android playback service is not active".into())
+        }
+    })
+}
+
+pub(crate) fn pause() -> Result<(), String> {
+    transport_bool("pause")
+}
+
+pub(crate) fn resume() -> Result<(), String> {
+    transport_bool("resume")
+}
+
+pub(crate) fn seek(position_ms: u64) -> Result<(), String> {
+    let position_ms = position_ms.min(i64::MAX as u64) as i64;
+    with_activity_env(|env, context| {
+        let accepted = call_playback_static(
+            env,
+            &context,
+            "seek",
+            "(J)Z",
+            &[JValue::Long(position_ms)],
+        )?
+        .z()
+        .map_err(|error| error.to_string())?;
+        accepted
+            .then_some(())
+            .ok_or_else(|| "Android playback service is not active".into())
+    })
+}
+
+pub(crate) fn set_volume(volume: f64) -> Result<(), String> {
+    let volume = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    with_activity_env(|env, context| {
+        let accepted = call_playback_static(
+            env,
+            &context,
+            "setVolume",
+            "(D)Z",
+            &[JValue::Double(volume)],
+        )?
+        .z()
+        .map_err(|error| error.to_string())?;
+        accepted
+            .then_some(())
+            .ok_or_else(|| "Android playback service is not active".into())
+    })
+}
+
+pub(crate) fn clock() -> Result<(Duration, Duration), String> {
+    with_activity_env(|env, context| {
+        let value = call_playback_static(env, &context, "getClockJson", "()Ljava/lang/String;", &[])?
+            .l()
+            .map_err(|error| error.to_string())?;
+        let json = returned_string(env, value, "PlaybackService clock")?;
+        let value: serde_json::Value =
+            serde_json::from_str(&json).map_err(|error| format!("Media3 clock JSON: {error}"))?;
+        if let Some(error) = value
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .filter(|error| !error.is_empty())
+        {
+            return Err(error.to_string());
+        }
+        let position = value
+            .get("positionMs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let duration = value
+            .get("durationMs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        Ok((
+            Duration::from_millis(position),
+            Duration::from_millis(duration),
+        ))
+    })
+}
+
+pub(crate) fn stop() -> Result<(), String> {
+    with_activity_env(|env, context| {
+        call_playback_static(
+            env,
+            &context,
+            "stop",
             "(Landroid/content/Context;)V",
             &[JValue::Object(&context)],
-        )
-        .map_err(|e| format!("PlaybackService.start: {e}"))?;
+        )?;
         Ok(())
     })
 }
@@ -352,8 +519,9 @@ pub fn update_android_playback_metadata(
         let j_artist: JString = env.new_string(artist).map_err(|e| e.to_string())?;
         let j_album: JString = env.new_string(album).map_err(|e| e.to_string())?;
         let j_artwork: JString = env.new_string(artwork_url).map_err(|e| e.to_string())?;
-        env.call_static_method(
-            "com/nishal21/nekobeat/PlaybackService",
+        call_playback_static(
+            env,
+            &context,
             "updateMetadata",
             "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
             &[
@@ -364,8 +532,7 @@ pub fn update_android_playback_metadata(
                 JValue::Object(&j_artwork),
                 JValue::Long(duration_ms.max(0)),
             ],
-        )
-        .map_err(|e| format!("PlaybackService.updateMetadata: {e}"))?;
+        )?;
         Ok(())
     })
 }
@@ -378,8 +545,9 @@ pub fn update_android_playback_state(
     playback_rate: f64,
 ) -> Result<(), String> {
     with_activity_env(|env, context| {
-        env.call_static_method(
-            "com/nishal21/nekobeat/PlaybackService",
+        call_playback_static(
+            env,
+            &context,
             "updateState",
             "(Landroid/content/Context;ZJJD)V",
             &[
@@ -393,22 +561,12 @@ pub fn update_android_playback_state(
                     1.0
                 }),
             ],
-        )
-        .map_err(|e| format!("PlaybackService.updateState: {e}"))?;
+        )?;
         Ok(())
     })
 }
 
 #[tauri::command]
 pub fn stop_android_playback_service() -> Result<(), String> {
-    with_activity_env(|env, context| {
-        env.call_static_method(
-            "com/nishal21/nekobeat/PlaybackService",
-            "stop",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&context)],
-        )
-        .map_err(|e| format!("PlaybackService.stop: {e}"))?;
-        Ok(())
-    })
+    stop()
 }

@@ -192,7 +192,11 @@ pub struct SpotifySearchHit {
 }
 
 /// Search Spotify tracks via Web API (in-process — no Go sidecar).
-pub async fn search_tracks(query: &str, limit: u32, offset: u32) -> Result<Vec<SpotifySearchHit>, String> {
+pub async fn search_tracks(
+    query: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<SpotifySearchHit>, String> {
     let q = query.trim();
     if q.is_empty() {
         return Ok(vec![]);
@@ -262,7 +266,11 @@ pub async fn search_tracks(query: &str, limit: u32, offset: u32) -> Result<Vec<S
             .unwrap_or_default();
 
         for item in items {
-            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if id.is_empty() {
                 continue;
             }

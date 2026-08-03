@@ -16,7 +16,6 @@ import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import org.freedesktop.gstreamer.GStreamer
 import org.json.JSONObject
 import java.io.File
 
@@ -36,11 +35,6 @@ class MainActivity : TauriActivity() {
       File(bin, ".native_lib_dir").writeText(applicationInfo.nativeLibraryDir)
     } catch (e: Exception) {
       android.util.Log.w("NekoBeat", "Failed to write native lib dir marker", e)
-    }
-    try {
-      GStreamer.init(this)
-    } catch (e: Exception) {
-      android.util.Log.e("NekoBeat", "GStreamer.init failed", e)
     }
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -64,6 +58,8 @@ class MainActivity : TauriActivity() {
       unregisterReceiver(mediaActionReceiver)
       mediaActionReceiverRegistered = false
     }
+    // Activity teardown — drop lyrics chrome (Recents wipe is handled in PlaybackService).
+    LyricsNotification.clearOnAppClosed(applicationContext)
     super.onDestroy()
   }
 
@@ -157,8 +153,7 @@ class MainActivity : TauriActivity() {
     @JvmStatic
     fun mediaSessionSupport(context: Context): Boolean {
       return try {
-        // androidx.media keeps MediaSessionCompat in its historical support-v4 package.
-        Class.forName("android.support.v4.media.session.MediaSessionCompat")
+        Class.forName("androidx.media3.session.MediaSession")
         val component = ComponentName(context, PlaybackService::class.java)
         val service = if (Build.VERSION.SDK_INT >= 33) {
           context.packageManager.getServiceInfo(

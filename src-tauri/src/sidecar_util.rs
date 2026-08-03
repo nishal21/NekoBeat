@@ -48,7 +48,9 @@ pub async fn run_sidecar(
                                 .to_lowercase()
                                 .contains("not found")
                         {
-                            println!("Spotify sidecar: plugin returned not-found — trying filesystem");
+                            println!(
+                                "Spotify sidecar: plugin returned not-found — trying filesystem"
+                            );
                             return run_sidecar_fs(args, timeout).await;
                         }
                         Ok(out)
@@ -74,13 +76,11 @@ async fn run_sidecar_fs(args: &[&str], timeout: Duration) -> Result<SidecarOutpu
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.args(args);
     // Prefer nativeLibraryDir on PATH (exec-safe on Android)
-    let path_dirs: Vec<std::path::PathBuf> = [
-        android_bin::native_lib_dir(),
-        android_bin::bin_dir(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let path_dirs: Vec<std::path::PathBuf> =
+        [android_bin::native_lib_dir(), android_bin::bin_dir()]
+            .into_iter()
+            .flatten()
+            .collect();
     if !path_dirs.is_empty() {
         let mut paths = path_dirs.clone();
         if let Some(existing) = std::env::var_os("PATH") {

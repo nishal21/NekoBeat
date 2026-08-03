@@ -1,9 +1,9 @@
 //! Android: prefer executing jniLibs from nativeLibraryDir (filesDir is often noexec).
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 #[cfg(target_os = "android")]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 static BIN_DIR: OnceLock<PathBuf> = OnceLock::new();
 static NATIVE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -11,15 +11,17 @@ static NATIVE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static ENSURED: AtomicBool = AtomicBool::new(false);
 
 pub fn bin_dir() -> Option<PathBuf> {
-    BIN_DIR.get().cloned().or_else(|| {
-        std::env::var_os("NEKOBEAT_BIN_DIR").map(PathBuf::from)
-    })
+    BIN_DIR
+        .get()
+        .cloned()
+        .or_else(|| std::env::var_os("NEKOBEAT_BIN_DIR").map(PathBuf::from))
 }
 
 pub fn native_lib_dir() -> Option<PathBuf> {
-    NATIVE_DIR.get().cloned().or_else(|| {
-        std::env::var_os("NEKOBEAT_NATIVE_LIB_DIR").map(PathBuf::from)
-    })
+    NATIVE_DIR
+        .get()
+        .cloned()
+        .or_else(|| std::env::var_os("NEKOBEAT_NATIVE_LIB_DIR").map(PathBuf::from))
 }
 
 pub fn set_bin_dir(path: PathBuf) {
@@ -206,19 +208,48 @@ fn find_spotiflac_cli_desktop() -> Result<PathBuf, String> {
 
         #[cfg(windows)]
         {
-            candidates.push(manifest.join("binaries").join("spotiflac-cli-x86_64-pc-windows-msvc.exe"));
-            candidates.push(manifest.join("binaries").join("spotiflac-cli-x86_64-pc-windows-gnu.exe"));
-            candidates.push(manifest.join("bin").join("spotiflac-cli-x86_64-pc-windows-msvc.exe"));
-            candidates.push(manifest.join("target").join("debug").join("spotiflac-cli.exe"));
+            candidates.push(
+                manifest
+                    .join("binaries")
+                    .join("spotiflac-cli-x86_64-pc-windows-msvc.exe"),
+            );
+            candidates.push(
+                manifest
+                    .join("binaries")
+                    .join("spotiflac-cli-x86_64-pc-windows-gnu.exe"),
+            );
+            candidates.push(
+                manifest
+                    .join("bin")
+                    .join("spotiflac-cli-x86_64-pc-windows-msvc.exe"),
+            );
+            candidates.push(
+                manifest
+                    .join("target")
+                    .join("debug")
+                    .join("spotiflac-cli.exe"),
+            );
         }
         #[cfg(target_os = "linux")]
         {
-            candidates.push(manifest.join("binaries").join("spotiflac-cli-x86_64-unknown-linux-gnu"));
+            candidates.push(
+                manifest
+                    .join("binaries")
+                    .join("spotiflac-cli-x86_64-unknown-linux-gnu"),
+            );
         }
         #[cfg(target_os = "macos")]
         {
-            candidates.push(manifest.join("binaries").join("spotiflac-cli-aarch64-apple-darwin"));
-            candidates.push(manifest.join("binaries").join("spotiflac-cli-x86_64-apple-darwin"));
+            candidates.push(
+                manifest
+                    .join("binaries")
+                    .join("spotiflac-cli-aarch64-apple-darwin"),
+            );
+            candidates.push(
+                manifest
+                    .join("binaries")
+                    .join("spotiflac-cli-x86_64-apple-darwin"),
+            );
         }
         if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {
             return Ok(found);

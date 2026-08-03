@@ -1,4 +1,4 @@
-/** NekoBeat playback / library prefs (Harmonoid-inspired, neon-branded). */
+/** NekoBeat playback and library preferences. */
 
 function boolPref(key: string, fallback: boolean): boolean {
   try {

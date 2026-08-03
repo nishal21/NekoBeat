@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use scraper::{Html, Selector};
-use reqwest;
 use futures::future::join_all;
+use reqwest;
+use scraper::{Html, Selector};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,8 +31,16 @@ fn sanitize_country(country: Option<String>) -> String {
 fn dedupe_key(artist: &str, title: &str) -> String {
     format!(
         "{}|{}",
-        artist.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" "),
-        title.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+        artist
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        title
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     )
 }
 
@@ -64,7 +72,8 @@ pub async fn get_music_news(country: Option<String>) -> Result<Vec<NewsTrack>, S
 
     let apple_client = client.clone();
     let apple_cc = country.clone();
-    let apple_task = tokio::spawn(async move { fetch_apple_regional(apple_client, apple_cc).await });
+    let apple_task =
+        tokio::spawn(async move { fetch_apple_regional(apple_client, apple_cc).await });
 
     // JioSaavn is India-only: never fetched for US/GB/JP/etc.
     // Foreign users can opt in via Settings → region → India.
@@ -78,9 +87,14 @@ pub async fn get_music_news(country: Option<String>) -> Result<Vec<NewsTrack>, S
     let page_count = 5;
     let mut lfm_tasks = Vec::new();
     for page in 1..=page_count {
-        let url = format!("https://www.last.fm/music/+releases/out-now/popular?page={}", page);
+        let url = format!(
+            "https://www.last.fm/music/+releases/out-now/popular?page={}",
+            page
+        );
         let client_clone = client.clone();
-        lfm_tasks.push(tokio::spawn(async move { fetch_news_page(client_clone, url).await }));
+        lfm_tasks.push(tokio::spawn(async move {
+            fetch_news_page(client_clone, url).await
+        }));
     }
 
     let apple_join = apple_task;
@@ -154,7 +168,10 @@ struct AppleAlbum {
     url: Option<String>,
 }
 
-async fn fetch_apple_regional(client: reqwest::Client, country: String) -> Result<Vec<NewsTrack>, String> {
+async fn fetch_apple_regional(
+    client: reqwest::Client,
+    country: String,
+) -> Result<Vec<NewsTrack>, String> {
     // Songs chart for IN is more local; albums for everyone else
     let kind = if country == "in" { "songs" } else { "albums" };
     let url = format!(
@@ -262,12 +279,7 @@ async fn fetch_jiosaavn_new(client: reqwest::Client) -> Result<Vec<NewsTrack>, S
         }
         if artist.is_empty() {
             let sub = decode_basic_entities(item.subtitle.unwrap_or_default().trim());
-            artist = sub
-                .split(" - ")
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            artist = sub.split(" - ").next().unwrap_or("").trim().to_string();
         }
         if artist.is_empty() {
             continue;
@@ -278,10 +290,7 @@ async fn fetch_jiosaavn_new(client: reqwest::Client) -> Result<Vec<NewsTrack>, S
             .as_ref()
             .and_then(|m| m.release_date.clone())
             .unwrap_or_default();
-        let artwork_url = item
-            .image
-            .unwrap_or_default()
-            .replace("150x150", "500x500");
+        let artwork_url = item.image.unwrap_or_default().replace("150x150", "500x500");
         let url = item.perma_url.unwrap_or_default();
 
         tracks.push(NewsTrack {
@@ -305,11 +314,16 @@ async fn fetch_news_page(client: reqwest::Client, url: String) -> Result<Vec<New
     let document = Html::parse_document(&html_content);
     let mut tracks = Vec::new();
 
-    let item_selector = Selector::parse(".resource-list--release-list-item").map_err(|_| "Failed to parse item selector")?;
-    let title_selector = Selector::parse(".link-block-target").map_err(|_| "Failed to parse title selector")?;
-    let artist_selector = Selector::parse(".resource-list--release-list-item-artist").map_err(|_| "Failed to parse artist selector")?;
-    let img_selector = Selector::parse(".resource-list--release-list-item-image img").map_err(|_| "Failed to parse img selector")?;
-    let date_selector = Selector::parse(".resource-list--release-list-item-date").map_err(|_| "Failed to parse date selector")?;
+    let item_selector = Selector::parse(".resource-list--release-list-item")
+        .map_err(|_| "Failed to parse item selector")?;
+    let title_selector =
+        Selector::parse(".link-block-target").map_err(|_| "Failed to parse title selector")?;
+    let artist_selector = Selector::parse(".resource-list--release-list-item-artist")
+        .map_err(|_| "Failed to parse artist selector")?;
+    let img_selector = Selector::parse(".resource-list--release-list-item-image img")
+        .map_err(|_| "Failed to parse img selector")?;
+    let date_selector = Selector::parse(".resource-list--release-list-item-date")
+        .map_err(|_| "Failed to parse date selector")?;
 
     for element in document.select(&item_selector) {
         let title_elem = element.select(&title_selector).next();

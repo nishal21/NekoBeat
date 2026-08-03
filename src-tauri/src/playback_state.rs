@@ -61,7 +61,10 @@ fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn string_field<'a>(track: &'a Value, key: &str) -> Option<&'a str> {
-    track.get(key).and_then(Value::as_str).filter(|v| !v.is_empty())
+    track
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
 }
 
 fn looks_like_local_path(value: &str) -> bool {
@@ -69,7 +72,9 @@ fn looks_like_local_path(value: &str) -> bool {
         || value.starts_with("\\\\")
         || value.starts_with("content:")
         || value.starts_with("file:")
-        || (value.len() > 2 && value.as_bytes()[1] == b':' && matches!(value.as_bytes()[2], b'\\' | b'/'))
+        || (value.len() > 2
+            && value.as_bytes()[1] == b':'
+            && matches!(value.as_bytes()[2], b'\\' | b'/'))
 }
 
 fn local_path_exists(value: &str) -> bool {
@@ -82,7 +87,9 @@ fn local_path_exists(value: &str) -> bool {
 }
 
 fn sanitize_track(mut track: Value) -> Option<Value> {
-    let source = string_field(&track, "source").unwrap_or_default().to_owned();
+    let source = string_field(&track, "source")
+        .unwrap_or_default()
+        .to_owned();
     let id = string_field(&track, "id").unwrap_or_default().to_owned();
     let stream_url = string_field(&track, "stream_url")
         .or_else(|| string_field(&track, "streamUrl"))
@@ -98,8 +105,13 @@ fn sanitize_track(mut track: Value) -> Option<Value> {
         .or_else(|| string_field(&track, "artworkUrl"))
         .map(str::to_owned);
     let pure_local = source == "local"
-        || (looks_like_local_path(&id) && (stream_url.is_empty() || looks_like_local_path(&stream_url)));
-    let playable_path = if !stream_url.is_empty() { &stream_url } else { &id };
+        || (looks_like_local_path(&id)
+            && (stream_url.is_empty() || looks_like_local_path(&stream_url)));
+    let playable_path = if !stream_url.is_empty() {
+        &stream_url
+    } else {
+        &id
+    };
     if pure_local && (!looks_like_local_path(playable_path) || !local_path_exists(playable_path)) {
         return None;
     }
@@ -229,10 +241,8 @@ mod tests {
 
     #[test]
     fn corrupt_state_falls_back_and_is_quarantined() {
-        let dir = std::env::temp_dir().join(format!(
-            "nekobeat-playback-state-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nekobeat-playback-state-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(STATE_FILE);
@@ -240,9 +250,11 @@ mod tests {
         let state = load_from(&path);
         assert!(state.queue.is_empty());
         assert!(!path.exists());
-        assert!(fs::read_dir(&dir)
+        assert!(fs::read_dir(&dir).unwrap().any(|entry| entry
             .unwrap()
-            .any(|entry| entry.unwrap().file_name().to_string_lossy().contains("corrupt-")));
+            .file_name()
+            .to_string_lossy()
+            .contains("corrupt-")));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -264,10 +276,8 @@ mod tests {
 
     #[test]
     fn atomic_write_round_trips_versioned_state() {
-        let dir = std::env::temp_dir().join(format!(
-            "nekobeat-playback-write-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nekobeat-playback-write-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(STATE_FILE);

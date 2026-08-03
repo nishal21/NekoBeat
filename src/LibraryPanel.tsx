@@ -1,7 +1,7 @@
-import { Play, Shuffle, Music, User, Disc3, ArrowLeft, FolderOpen, FolderSearch, Settings, Library, Tags, ListMusic, Plus, Pencil, Trash2 } from "lucide-react";
+import { Play, Shuffle, Music, User, Disc3, ArrowLeft, FolderOpen, FolderSearch, Settings, Library, Tags, ListMusic, Plus, Pencil, Trash2, Heart, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 import logoImg from "./assets/logo.png";
-import { toDisplayArtUrl, TrackData, type PlaylistSummary } from "./hooks";
+import { coverSrcForUi, TrackData, type PlaylistSummary } from "./hooks";
 import { groupByArtist, groupByAlbum, groupByGenre, findArtistTracks, findAlbumTracks, findGenreTracks, sortLibraryTracks } from "./libraryGroup";
 import type { LibrarySort, LibrarySubTab } from "./prefs";
 
@@ -16,6 +16,7 @@ type Props = {
   tracks: TrackData[];
   isScanning: boolean;
   isMobileOs: boolean;
+  isAndroidOs: boolean;
   isPlaying: boolean;
   currentTrackPath: string | null;
   viewMode: 'grid' | 'list';
@@ -30,6 +31,7 @@ type Props = {
   coverFallback: boolean;
   showAudioFormat: boolean;
   onScan: () => void;
+  onRefresh: () => void;
   onAddSongs: () => void;
   onPlayAll: (shuffle?: boolean) => void;
   onPlayTrackList: (list: TrackData[], shuffle?: boolean, startPath?: string) => void;
@@ -40,6 +42,7 @@ type Props = {
   onOpenArtist: (artist: string) => void;
   onOpenAlbum: (album: string, artist: string) => void;
   onOpenSettings: () => void;
+  onOpenLiked: () => void;
   onArtResolved: (filepath: string, url: string) => void;
   playlists: PlaylistSummary[];
   playlistTracks: TrackData[];
@@ -54,19 +57,18 @@ type Props = {
   ViewToggle: React.ComponentType<{ viewMode: 'grid' | 'list'; onChange: (m: 'grid' | 'list') => void }>;
   AlbumCard: React.ComponentType<any>;
   TrackResult: React.ComponentType<any>;
-  placeholderArt: (seed?: string) => string;
 };
 
 export function LibraryPanel(props: Props) {
   const {
-    tracks, isScanning, isMobileOs, isPlaying, currentTrackPath,
+    tracks, isScanning, isMobileOs, isAndroidOs, isPlaying, currentTrackPath,
     viewMode, setViewMode, librarySubTab, setLibrarySubTab,
     librarySort, setLibrarySort, libraryFocus, setLibraryFocus, techLabel, coverFallback, showAudioFormat,
-    onScan, onAddSongs, onPlayAll, onPlayTrackList, onPlayLocal, onPlayNext, onAddQueue, onStreamExternal,
-    onOpenArtist, onOpenAlbum, onOpenSettings, onArtResolved,
+    onScan, onRefresh, onAddSongs, onPlayAll, onPlayTrackList, onPlayLocal, onPlayNext, onAddQueue, onStreamExternal,
+    onOpenArtist, onOpenAlbum, onOpenSettings, onOpenLiked, onArtResolved,
     playlists, playlistTracks, onCreatePlaylist, onRenamePlaylist, onDeletePlaylist,
     onOpenPlaylist, onAddToPlaylist, onRemoveFromPlaylist, onAddCurrentToPlaylist,
-    stripExtension, ViewToggle, AlbumCard, TrackResult, placeholderArt,
+    stripExtension, ViewToggle, AlbumCard, TrackResult,
   } = props;
 
   const title =
@@ -78,56 +80,129 @@ export function LibraryPanel(props: Props) {
           ? libraryFocus.name
           : libraryFocus?.kind === 'playlist'
             ? libraryFocus.name
-        : 'Your Library';
+        : isAndroidOs
+          ? ({ tracks: 'Songs', artists: 'Artists', albums: 'Albums', genres: 'Genres', playlists: 'Playlists' } as const)[librarySubTab]
+          : 'Your Library';
   const sortedTracks = sortLibraryTracks(tracks, librarySort);
+  const showLibraryActions = !libraryFocus && librarySubTab !== 'playlists';
+  const showPlayActions = tracks.length > 0 && !libraryFocus && librarySubTab === 'tracks';
 
   return (
     <>
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-4 md:mb-6">
-        <h1 className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tighter leading-none">{title}</h1>
-        <div className="flex flex-wrap items-center gap-2">
+      <header className="library-header mb-5 md:mb-7">
+        <div className="flex items-end justify-between gap-4 mb-4 md:mb-5">
+          <div className="min-w-0">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tighter leading-none truncate">
+              {title}
+            </h1>
+            {showLibraryActions && tracks.length > 0 && (
+              <p className="mt-2 text-xs sm:text-sm text-[var(--color-ink-muted)] font-medium">
+                {tracks.length.toLocaleString()} song{tracks.length === 1 ? '' : 's'}
+                {isScanning ? ' · updating…' : ''}
+              </p>
+            )}
+          </div>
           {!libraryFocus && <ViewToggle viewMode={viewMode} onChange={setViewMode} />}
-          {!libraryFocus && librarySubTab !== 'playlists' && (
-            <select
-              value={librarySort}
-              onChange={(event) => setLibrarySort(event.target.value as LibrarySort)}
-              aria-label="Sort library"
-              className="h-11 rounded-xl border border-white/15 bg-zinc-900 px-3 text-xs font-bold text-white"
-            >
-              <option value="az">A–Z</option>
-              <option value="date_added">Date added</option>
-              <option value="year">Year</option>
-              <option value="album_artist">Album artist</option>
-            </select>
-          )}
-          {tracks.length > 0 && !libraryFocus && librarySubTab === 'tracks' && (
-            <>
-              <button type="button" onClick={() => onPlayAll(false)} className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-xs shadow-[inset_0_2px_4px_rgba(255,255,255,0.5),0_8px_18px_rgba(219,255,0,0.3)]" title="Play all">
-                <Play size={14} fill="black" className="shrink-0" /><span>Play all</span>
-              </button>
-              <button type="button" onClick={() => onPlayAll(true)} className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-white/10 text-white border border-white/15 rounded-xl font-bold text-xs" title="Shuffle all">
-                <Shuffle size={14} className="shrink-0" /><span>Shuffle</span>
-              </button>
-            </>
-          )}
-          {isMobileOs ? (
-            <>
-              <button type="button" onClick={onScan} disabled={isScanning} className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-xs disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_8px_20px_rgba(219,255,0,0.35)]">
-                <FolderSearch size={15} className="shrink-0" /><span>{isScanning ? "Scanning…" : "Scan music"}</span>
-              </button>
-              <button type="button" onClick={onAddSongs} disabled={isScanning} className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-white/10 text-white border border-white/15 rounded-xl font-bold text-xs disabled:opacity-50">
-                <Music size={15} className="shrink-0" /><span>Add songs</span>
-              </button>
-            </>
-          ) : (
-            <button type="button" onClick={onScan} disabled={isScanning} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 px-5 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)]">
-              <FolderOpen size={16} className="shrink-0" /><span>{isScanning ? "Scanning folder…" : "Add folder"}</span>
-            </button>
-          )}
         </div>
-      </div>
 
-      {(
+        {showLibraryActions && (
+          <div className="library-toolbar">
+            <div className="library-toolbar-row">
+              <div className="library-toolbar-group">
+                <label className="library-sort">
+                  <span className="sr-only">Sort library</span>
+                  <select
+                    value={librarySort}
+                    onChange={(event) => setLibrarySort(event.target.value as LibrarySort)}
+                    aria-label="Sort library"
+                    className="library-btn library-btn-ghost library-select"
+                  >
+                    <option value="az">A–Z</option>
+                    <option value="date_added">Date added</option>
+                    <option value="year">Year</option>
+                    <option value="album_artist">Album artist</option>
+                  </select>
+                </label>
+              </div>
+
+              {showPlayActions && (
+                <div className="library-toolbar-group library-toolbar-group-end">
+                  <button type="button" onClick={() => onPlayAll(false)} className="library-btn library-btn-primary" title="Play all">
+                    <Play size={15} fill="currentColor" className="shrink-0" />
+                    <span>Play all</span>
+                  </button>
+                  <button type="button" onClick={() => onPlayAll(true)} className="library-btn library-btn-ghost" title="Shuffle all">
+                    <Shuffle size={15} className="shrink-0" />
+                    <span>Shuffle</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="library-toolbar-row library-toolbar-row-actions">
+              <div className="library-toolbar-group library-toolbar-group-stretch">
+                {tracks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={onRefresh}
+                    disabled={isScanning}
+                    className="library-btn library-btn-accent"
+                    title="Look for new songs in your music folders"
+                  >
+                    <RefreshCw size={15} className={`shrink-0 ${isScanning ? 'animate-spin' : ''}`} />
+                    <span>{isScanning ? 'Refreshing…' : 'Refresh'}</span>
+                  </button>
+                )}
+                {isMobileOs ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={tracks.length > 0 ? onAddSongs : onScan}
+                      disabled={isScanning}
+                      className={`library-btn ${tracks.length > 0 ? 'library-btn-ghost' : 'library-btn-accent'}`}
+                      title={tracks.length > 0 ? 'Import selected files' : 'Scan Music and Download'}
+                    >
+                      {tracks.length > 0 ? <Music size={15} className="shrink-0" /> : <FolderSearch size={15} className="shrink-0" />}
+                      <span>
+                        {isScanning
+                          ? 'Scanning…'
+                          : tracks.length > 0
+                            ? 'Add songs'
+                            : 'Scan music'}
+                      </span>
+                    </button>
+                    {tracks.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={onScan}
+                        disabled={isScanning}
+                        className="library-btn library-btn-ghost library-btn-icon"
+                        title="Full device scan"
+                        aria-label="Full device scan"
+                      >
+                        <FolderSearch size={16} />
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onScan}
+                    disabled={isScanning}
+                    className={`library-btn ${tracks.length > 0 ? 'library-btn-ghost' : 'library-btn-accent'}`}
+                    title="Add a music folder"
+                  >
+                    <FolderOpen size={16} className="shrink-0" />
+                    <span>{isScanning ? 'Scanning…' : 'Add folder'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </header>
+
+      {!isAndroidOs && (
         <div className="flex items-center gap-1 mb-5 p-1 rounded-xl bg-white/5 border border-white/10 w-fit max-w-full overflow-x-auto">
           {([
             { id: 'tracks' as const, label: 'Tracks', icon: <Music size={14} /> },
@@ -155,25 +230,25 @@ export function LibraryPanel(props: Props) {
       )}
 
       {tracks.length === 0 && librarySubTab !== 'playlists' ? (
-        <div className="py-20 px-6 text-center max-w-md mx-auto space-y-4">
-          <Library size={48} className="mx-auto mb-2 text-[var(--color-neon-yellow)]/70" />
-          <h2 className="text-xl font-display font-black text-white tracking-tight">Your library is empty</h2>
-          <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">
+        <div className="py-16 px-5 text-center max-w-md mx-auto">
+          <Library size={44} className="mx-auto mb-4 text-[var(--color-neon-yellow)]/75" />
+          <h2 className="text-xl font-display font-black text-white tracking-tight mb-2">Your library is empty</h2>
+          <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed mb-6">
             {isMobileOs
-              ? "Allow audio access, then Scan music for files in Music / Download — or Add songs to import picks."
+              ? "Allow audio access, then scan Music / Download — or add individual songs."
               : "Add a folder of MP3, FLAC, or WAV files to play offline from this device."}
           </p>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <button onClick={onScan} disabled={isScanning} className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-[var(--color-neon-yellow)] text-black rounded-xl font-bold text-sm disabled:opacity-50">
+          <div className="library-empty-actions">
+            <button type="button" onClick={onScan} disabled={isScanning} className="library-btn library-btn-accent library-btn-lg">
               {isMobileOs ? <FolderSearch size={16} /> : <FolderOpen size={16} />}
               {isScanning ? "Scanning…" : isMobileOs ? "Scan device music" : "Add a music folder"}
             </button>
             {isMobileOs && (
-              <button onClick={onAddSongs} disabled={isScanning} className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-white/10 text-white border border-white/15 rounded-xl font-bold text-sm disabled:opacity-50">
+              <button type="button" onClick={onAddSongs} disabled={isScanning} className="library-btn library-btn-ghost library-btn-lg">
                 <Music size={16} /> Add songs
               </button>
             )}
-            <button type="button" onClick={onOpenSettings} className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-white/5 text-white border border-white/10 rounded-xl font-bold text-sm">
+            <button type="button" onClick={onOpenSettings} className="library-btn library-btn-ghost library-btn-lg">
               <Settings size={16} /> Settings
             </button>
           </div>
@@ -257,6 +332,7 @@ export function LibraryPanel(props: Props) {
               index={i}
               title={album.name}
               artist={album.artist}
+              album={album.name}
               artworkUrl={album.artwork_url}
               source="local"
               coverFallback={coverFallback}
@@ -278,6 +354,7 @@ export function LibraryPanel(props: Props) {
       ) : librarySubTab === 'playlists' ? (
         <PlaylistBrowser
           playlists={playlists}
+          onOpenLiked={onOpenLiked}
           onCreate={onCreatePlaylist}
           onRename={onRenamePlaylist}
           onDelete={onDeletePlaylist}
@@ -291,6 +368,7 @@ export function LibraryPanel(props: Props) {
               index={i}
               title={track.title}
               artist={track.artist}
+              album={track.album}
               artworkUrl={track.artwork_url}
               source={track.source || 'local'}
               formatLabel={techLabel(track)}
@@ -303,7 +381,7 @@ export function LibraryPanel(props: Props) {
           ))}
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2 sm:gap-2.5">
           {sortedTracks.map((track) => (
             <div key={track.filepath} className="flex items-center gap-2">
             <div className="min-w-0 flex-1"><TrackResult
@@ -315,7 +393,7 @@ export function LibraryPanel(props: Props) {
                 album: track.album,
                 album_artist: track.album_artist,
                 duration_ms: track.duration_ms,
-                artwork_url: track.artwork_url || placeholderArt(track.title),
+                artwork_url: track.artwork_url || '',
                 source: track.source || 'local',
                 stream_url: track.filepath,
                 format: track.format,
@@ -334,6 +412,8 @@ export function LibraryPanel(props: Props) {
                 replaygain_album_peak: track.replaygain_album_peak,
               }}
               showFormat={showAudioFormat}
+              coverFallback={coverFallback}
+              onArtResolved={(url: string) => onArtResolved(track.filepath, url)}
               onArtistClick={() => onOpenArtist(track.artist)}
               onPlayNext={() => onPlayNext(track)}
               onAddQueue={() => onAddQueue(track)}
@@ -455,7 +535,7 @@ function AlbumDetail({
       </button>
       <div className="flex flex-col sm:flex-row items-center sm:items-end gap-5">
         <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl overflow-hidden bg-zinc-800 border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.45)]">
-          <img src={toDisplayArtUrl(art) || art || logoImg} alt="" className="w-full h-full object-cover" />
+          <img src={coverSrcForUi(art) || logoImg} alt="" className="w-full h-full object-cover" />
         </div>
         <div className="text-center sm:text-left flex-1 min-w-0 space-y-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-[var(--color-neon-yellow)]">Album</p>
@@ -503,9 +583,10 @@ function AlbumDetail({
 }
 
 function PlaylistBrowser({
-  playlists, onCreate, onRename, onDelete, onOpen,
+  playlists, onOpenLiked, onCreate, onRename, onDelete, onOpen,
 }: {
   playlists: PlaylistSummary[];
+  onOpenLiked: () => void;
   onCreate: (name: string) => Promise<void>;
   onRename: (id: number, name: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
@@ -521,6 +602,13 @@ function PlaylistBrowser({
         <Plus size={16} /> New playlist
       </button>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <button type="button" onClick={onOpenLiked} className="flex min-h-[76px] items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 text-left">
+          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[var(--color-neon-yellow)]/12 text-[var(--color-neon-yellow)]"><Heart size={20} fill="currentColor" /></span>
+          <span className="min-w-0">
+            <span className="block truncate font-display font-bold text-white">Liked Songs</span>
+            <span className="block text-xs text-neutral-500">Your saved favourites</span>
+          </span>
+        </button>
         {playlists.map((playlist) => (
           <div key={playlist.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
             <button type="button" onClick={() => void onOpen(playlist)} className="min-w-0 flex-1 text-left">

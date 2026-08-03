@@ -1,5 +1,4 @@
-//! Cross-platform GStreamer initialization.
-//! Same `audio.rs` playbin pipeline on Windows, Linux, macOS, and Android.
+//! Desktop GStreamer initialization. Android playback is owned by Media3.
 
 /// Call once before any GStreamer element is created.
 pub fn ensure_initialized() {
@@ -12,9 +11,6 @@ pub fn ensure_initialized() {
         not(target_os = "ios")
     ))]
     init_unix();
-
-    #[cfg(target_os = "android")]
-    init_android();
 }
 
 #[cfg(target_os = "windows")]
@@ -31,7 +27,9 @@ fn init_windows() {
     const LOAD_LIBRARY_SEARCH_USER_DIRS: u32 = 0x00000400;
 
     let exe_path = env::current_exe().unwrap_or_default();
-    let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let exe_dir = exe_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
 
     let paths_to_check = vec![
         exe_dir.join("gstreamer"),
@@ -56,7 +54,10 @@ fn init_windows() {
                 AddDllDirectory(wide_path.as_ptr());
             }
             if let Ok(current_path) = env::var("PATH") {
-                env::set_var("PATH", format!("{};{}", gst_bin.to_string_lossy(), current_path));
+                env::set_var(
+                    "PATH",
+                    format!("{};{}", gst_bin.to_string_lossy(), current_path),
+                );
             }
             env::set_var(
                 "GST_PLUGIN_PATH",
@@ -138,16 +139,5 @@ fn init_unix() {
             );
         }
         Err(e) => eprintln!("GStreamer init failed: {}", e),
-    }
-}
-
-/// Android: link `libgstreamer_android.so` via NDK (see docs/ANDROID_GSTREAMER.md).
-#[cfg(target_os = "android")]
-fn init_android() {
-    // MainActivity initializes the Android GStreamer runtime with a Context first. Avoid
-    // scanning/loading the full plugin registry during app startup; the audio worker performs
-    // concrete element creation lazily after the first explicit Play request.
-    if let Err(error) = gstreamer::init() {
-        eprintln!("GStreamer Android init failed: {error}");
     }
 }

@@ -160,7 +160,7 @@ const albumArtCache = new Map<string, string | null>();
 const albumArtInflight = new Map<string, Promise<string | null>>();
 let albumArtActive = 0;
 const albumArtQueue: Array<() => void> = [];
-const ALBUM_ART_CONCURRENCY = 3;
+const ALBUM_ART_CONCURRENCY = 10;
 
 function runAlbumArtJob<T>(job: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -179,14 +179,86 @@ function runAlbumArtJob<T>(job: () => Promise<T>): Promise<T> {
     });
 }
 
+/** App logo / picsum — never treat as a real album cover. */
+export function isPlaceholderArt(url?: string | null): boolean {
+    if (!url) return true;
+    if (url.includes('picsum')) return true;
+    if (
+        /\/assets\/logo/i.test(url) ||
+        /logo-[A-Za-z0-9_-]+\.(png|webp|jpg|jpeg|svg)/i.test(url) ||
+        url.endsWith('/logo.png') ||
+        url.includes('nekobeat-logo')
+    ) {
+        return true;
+    }
+    return false;
+}
+
+/** True when two cover URLs likely point at the same file (http vs cached path). */
+export function coversSameAsset(a?: string | null, b?: string | null): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const leaf = (u: string) => {
+        let s = u;
+        try {
+            s = decodeURIComponent(s);
+        } catch {
+            /* keep */
+        }
+        const cleaned = s.replace(/\\/g, '/').split('?')[0] || s;
+        const parts = cleaned.split('/');
+        return (parts[parts.length - 1] || cleaned).toLowerCase();
+    };
+    const la = leaf(a);
+    const lb = leaf(b);
+    return !!la && la === lb && la.length > 3;
+}
+
 export function isRealArtworkUrl(url?: string | null): boolean {
     if (!url) return false;
-    if (url.includes('picsum')) return false;
+    if (isPlaceholderArt(url)) return false;
     if (url.startsWith('data:')) return false;
     if (/^https?:\/\//i.test(url) || url.startsWith('asset:') || url.startsWith('blob:')) return true;
-    // Local disk path (Windows / Unix) — offline liked art
-    if (/^[a-zA-Z]:[\\/]/.test(url) || url.startsWith('/') || url.startsWith('\\\\')) return true;
+    if (url.includes('asset.localhost') || url.includes('tauri.localhost')) return true;
+    // Android MediaStore / SAF
+    if (url.startsWith('content:')) return true;
+    // Local disk path (Windows / Unix / Android) — offline / embedded covers
+    if (/^[a-zA-Z]:[\\/]/.test(url) || url.startsWith('/') || url.startsWith('\\\\') || url.startsWith('file:')) {
+        // Absolute /assets/... from the WebView is the SPA bundle, not a music file cover
+        if (/^\/assets\//i.test(url)) return false;
+        return true;
+    }
     return false;
+}
+
+/** Prefer keeping a good cover; never replace real art with a placeholder. */
+export function pickStableCover(
+    current?: string | null,
+    next?: string | null,
+): string | undefined {
+    const n = (next || '').trim();
+    const c = (current || '').trim();
+    if (n && isRealArtworkUrl(n) && !isPlaceholderArt(n)) {
+        if (c && coversSameAsset(c, n)) return c;
+        return n;
+    }
+    if (c && isRealArtworkUrl(c) && !isPlaceholderArt(c)) return c;
+    if (n && !isPlaceholderArt(n)) return n;
+    return c || undefined;
+}
+
+/** Preload so we can swap src without a blank flash. */
+export function preloadCoverUrl(url: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        if (!url || isPlaceholderArt(url)) {
+            resolve(false);
+            return;
+        }
+        const img = new Image();
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = url;
+    });
 }
 
 /** Prefer remote https art when present; use local disk only when no remote URL. */
@@ -195,12 +267,28 @@ export function toDisplayArtUrl(remoteOrPath?: string | null, localPath?: string
     const local = (localPath && localPath.trim()) || '';
 
     // Working CDN / already-converted URLs first (avoids broken convertFileSrc locals)
-    if (/^https?:\/\//i.test(remote) || remote.startsWith('asset:') || remote.startsWith('blob:') || remote.startsWith('data:')) {
+    if (
+        /^https?:\/\//i.test(remote) ||
+        remote.startsWith('asset:') ||
+        remote.startsWith('blob:') ||
+        remote.startsWith('data:') ||
+        remote.startsWith('content:') ||
+        remote.includes('asset.localhost') ||
+        remote.includes('tauri.localhost')
+    ) {
         return remote;
     }
 
     const tryLocal = (path: string): string | undefined => {
-        if (/^https?:\/\//i.test(path) || path.startsWith('asset:') || path.startsWith('blob:') || path.startsWith('data:')) {
+        if (
+            /^https?:\/\//i.test(path) ||
+            path.startsWith('asset:') ||
+            path.startsWith('blob:') ||
+            path.startsWith('data:') ||
+            path.startsWith('content:') ||
+            path.includes('asset.localhost') ||
+            path.includes('tauri.localhost')
+        ) {
             return path;
         }
         if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\') || path.startsWith('file:')) {
@@ -221,31 +309,194 @@ export function toDisplayArtUrl(remoteOrPath?: string | null, localPath?: string
     if (remote) {
         const fromRemoteAsPath = tryLocal(remote);
         if (fromRemoteAsPath) return fromRemoteAsPath;
+        // Last resort: return raw path so <img> / convert attempts elsewhere can still try
         return remote;
     }
     return undefined;
 }
 
-export async function fetchAlbumArt(title: string, artist: string): Promise<string | null> {
-    const key = `${title.trim().toLowerCase()}|${artist.trim().toLowerCase()}`;
-    if (albumArtCache.has(key)) return albumArtCache.get(key) ?? null;
-    const existing = albumArtInflight.get(key);
+/** True when an <img src> can load this in the Tauri WebView (not a raw FS path). */
+export function isWebViewArtUrl(url?: string | null): boolean {
+    if (!url) return false;
+    if (isPlaceholderArt(url)) return false;
+    return (
+        /^https?:\/\//i.test(url) ||
+        url.startsWith('asset:') ||
+        url.startsWith('blob:') ||
+        url.startsWith('data:') ||
+        url.startsWith('content:') ||
+        url.includes('asset.localhost') ||
+        url.includes('tauri.localhost')
+    );
+}
+
+/** Always return a WebView-safe cover URL for player / home / list UI. */
+export function coverSrcForUi(
+    artwork?: string | null,
+    localArtwork?: string | null,
+    fallback?: string | null,
+): string | undefined {
+    const primary = toDisplayArtUrl(artwork, localArtwork);
+    if (primary && isWebViewArtUrl(primary)) return primary;
+    if (fallback) {
+        if (isWebViewArtUrl(fallback)) return fallback;
+        const fb = toDisplayArtUrl(fallback);
+        if (fb && isWebViewArtUrl(fb)) return fb;
+    }
+    // Never return raw filesystem / file:// paths — Android WebView cannot load them
+    // (Media3 can via file://, which is why art shows outside the app only).
+    return undefined;
+}
+
+/** True when this is a disk path Media3 can load but <img> usually cannot. */
+export function isLocalCoverPath(url?: string | null): boolean {
+    if (!url) return false;
+    const u = url.trim();
+    if (!u || isPlaceholderArt(u)) return false;
+    if (
+        /^https?:\/\//i.test(u) ||
+        u.startsWith('data:') ||
+        u.startsWith('blob:') ||
+        u.startsWith('asset:') ||
+        u.startsWith('content:')
+    ) {
+        return false;
+    }
+    if (u.includes('asset.localhost') || u.includes('tauri.localhost')) return false;
+    return (
+        u.startsWith('file:') ||
+        u.startsWith('/') ||
+        /^[a-zA-Z]:[\\/]/.test(u) ||
+        u.startsWith('\\\\')
+    );
+}
+
+const artworkDataUrlCache = new Map<string, string>();
+const artworkDataUrlInflight = new Map<string, Promise<string | null>>();
+
+function normalizeArtPathKey(path: string): string {
+    return path.trim().replace(/^file:\/\/\/?/i, '').replace(/\\/g, '/');
+}
+
+/** Load local cover bytes as data: URL — reliable in Android/desktop WebView. */
+export async function localArtworkDataUrl(path: string): Promise<string | null> {
+    const key = normalizeArtPathKey(path);
+    if (!key) return null;
+    const cached = artworkDataUrlCache.get(key);
+    if (cached) return cached;
+    const existing = artworkDataUrlInflight.get(key);
     if (existing) return existing;
+    const promise = invoke<string>('artwork_as_data_url', { path: key })
+        .then((url) => {
+            if (url && url.startsWith('data:')) {
+                artworkDataUrlCache.set(key, url);
+                return url;
+            }
+            return null;
+        })
+        .catch(() => null)
+        .finally(() => {
+            artworkDataUrlInflight.delete(key);
+        });
+    artworkDataUrlInflight.set(key, promise);
+    return promise;
+}
+
+/**
+ * Resolve art for in-app <img>: https/content as-is; local paths → data URL
+ * so UI matches MediaSession/lock-screen covers.
+ */
+export async function resolveCoverForWebView(
+    artwork?: string | null,
+    localArtwork?: string | null,
+): Promise<string | undefined> {
+    const candidates = [localArtwork, artwork].map((s) => (s || '').trim()).filter(Boolean);
+    for (const c of candidates) {
+        if (isPlaceholderArt(c)) continue;
+        if (
+            /^https?:\/\//i.test(c) ||
+            c.startsWith('data:') ||
+            c.startsWith('blob:') ||
+            c.startsWith('content:')
+        ) {
+            return c;
+        }
+        if (isLocalCoverPath(c)) {
+            const data = await localArtworkDataUrl(c);
+            if (data) return data;
+            // Fall through to convertFileSrc for desktop
+            const converted = coverSrcForUi(c);
+            if (converted) return converted;
+        }
+    }
+    const quick = coverSrcForUi(artwork, localArtwork);
+    if (quick && isWebViewArtUrl(quick)) return quick;
+    return undefined;
+}
+
+/**
+ * Persist a fetched https cover into app storage (and SQLite) so it survives offline.
+ * Returns a WebView-displayable URL.
+ */
+export async function persistLibraryArtwork(
+    filepath: string,
+    url: string,
+): Promise<string> {
+    const trimmed = (url || '').trim();
+    if (!trimmed || !filepath) return trimmed;
+    try {
+        const local = await invoke<string>('cache_remote_artwork', {
+            filepath,
+            url: trimmed,
+        });
+        const display = coverSrcForUi(local) || coverSrcForUi(trimmed) || trimmed;
+        return display;
+    } catch (e) {
+        console.warn('persistLibraryArtwork failed', e);
+        return coverSrcForUi(trimmed) || trimmed;
+    }
+}
+
+export async function fetchAlbumArt(
+    title: string,
+    artist: string,
+    album?: string,
+    opts?: { force?: boolean },
+): Promise<string | null> {
+    const cleanTitle = cleanArtQueryTitle(title);
+    const cleanArtist = (artist || '').trim();
+    const cleanAlbum = (album || '').trim();
+    const key = `${cleanTitle.toLowerCase()}|${cleanArtist.toLowerCase()}|${cleanAlbum.toLowerCase()}`;
+
+    if (!opts?.force && albumArtCache.has(key)) {
+        const cached = albumArtCache.get(key) ?? null;
+        // Allow a later force/retry path; null misses stay skippable unless force
+        if (cached) return cached;
+        if (cached === null && !opts?.force) return null;
+    }
+    if (opts?.force) {
+        albumArtCache.delete(key);
+        albumArtInflight.delete(key);
+    }
+
+    const existing = albumArtInflight.get(key);
+    if (existing && !opts?.force) return existing;
 
     const promise = runAlbumArtJob(async () => {
         try {
-            const query = encodeURIComponent(`${title} ${artist}`);
-            const res = await fetch(`https://itunes.apple.com/search?term=${query}&limit=1&media=music`);
-            const data = await res.json();
-            if (data.results && data.results.length > 0) {
-                const url = data.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
-                albumArtCache.set(key, url);
-                return url;
-            }
-            albumArtCache.set(key, null);
-            return null;
+            const url =
+                (await fetchArtFromItunes(cleanTitle, cleanArtist, cleanAlbum)) ||
+                (await fetchArtFromItunesSimple(cleanTitle, cleanArtist)) ||
+                (await fetchArtFromItunesAlbum(cleanArtist, cleanAlbum || cleanTitle)) ||
+                (await fetchArtFromDeezer(cleanTitle, cleanArtist, cleanAlbum)) ||
+                (await fetchArtFromLastfm(cleanTitle, cleanArtist, cleanAlbum)) ||
+                (await fetchArtFromMusicBrainz(cleanTitle, cleanArtist, cleanAlbum)) ||
+                (await fetchArtFromItunesArtistOnly(cleanArtist)) ||
+                null;
+            albumArtCache.set(key, url);
+            return url;
         } catch (e) {
-            console.warn("Failed to fetch album art from iTunes", e);
+            console.warn('Failed to fetch album art', e);
             return null;
         } finally {
             albumArtInflight.delete(key);
@@ -254,6 +505,393 @@ export async function fetchAlbumArt(title: string, artist: string): Promise<stri
 
     albumArtInflight.set(key, promise);
     return promise;
+}
+
+/** Strip file junk so cover search matches real metadata. */
+function cleanArtQueryTitle(raw: string): string {
+    let s = (raw || '').trim();
+    s = s.replace(/\.(mp3|flac|m4a|aac|wav|ogg|opus|wma|aiff|aif|alac|dsf|dff|wv|webm)$/i, '');
+    s = s.replace(/^\d{1,3}[\s._-]+/, ''); // leading track numbers
+    s = s.replace(/\s*[-–—]\s*/g, ' - ');
+    // "Artist - Title" when artist field is empty/unknown is handled by callers; keep both sides
+    return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Backfill covers for every library row missing real art.
+ * Uses the shared concurrency queue so we don't stampede the network.
+ */
+export async function fillMissingLibraryCovers(
+    tracks: Array<{
+        filepath: string;
+        title: string;
+        artist: string;
+        album?: string;
+        artwork_url?: string;
+        source?: string;
+    }>,
+    onResolved: (filepath: string, url: string) => void,
+    opts?: { signal?: AbortSignal; force?: boolean },
+): Promise<number> {
+    const missing = tracks.filter(
+        (t) =>
+            t.filepath &&
+            (!t.source || t.source === 'local') &&
+            !isRealArtworkUrl(t.artwork_url),
+    );
+    if (missing.length === 0) return 0;
+
+    let filled = 0;
+    await Promise.all(
+        missing.map(async (t) => {
+            if (opts?.signal?.aborted) return;
+            let title = t.title;
+            let artist = t.artist;
+            // Filename-style "Artist - Title" with empty/unknown artist
+            if ((!artist || /^unknown/i.test(artist)) && title.includes(' - ')) {
+                const parts = title.split(/\s+-\s+/);
+                if (parts.length >= 2) {
+                    artist = parts[0].trim();
+                    title = parts.slice(1).join(' - ').trim();
+                }
+            }
+            const url = await fetchAlbumArt(title, artist, t.album, { force: opts?.force });
+            if (opts?.signal?.aborted || !url) return;
+            let stored = url;
+            try {
+                stored = await invoke<string>('cache_remote_artwork', {
+                    filepath: t.filepath,
+                    url,
+                });
+            } catch {
+                /* keep remote URL in DB via patchTrack caller */
+            }
+            if (opts?.signal?.aborted) return;
+            filled += 1;
+            onResolved(t.filepath, stored);
+        }),
+    );
+    return filled;
+}
+
+/** One-shot cover fetch for play/click — always retries network if missing. */
+export async function ensureTrackCoverArt(
+    track: { title: string; artist: string; album?: string; artwork_url?: string; filepath?: string },
+    onResolved?: (displayUrl: string, storedPath?: string) => void,
+): Promise<string | null> {
+    if (isRealArtworkUrl(track.artwork_url)) {
+        const resolved = await resolveCoverForWebView(track.artwork_url);
+        if (resolved) {
+            onResolved?.(resolved, track.artwork_url || undefined);
+            return resolved;
+        }
+        const display = coverSrcForUi(track.artwork_url);
+        if (display) {
+            onResolved?.(display, track.artwork_url || undefined);
+            return display;
+        }
+        return null;
+    }
+    let title = track.title;
+    let artist = track.artist;
+    if ((!artist || /^unknown/i.test(artist)) && title.includes(' - ')) {
+        const parts = title.split(/\s+-\s+/);
+        if (parts.length >= 2) {
+            artist = parts[0].trim();
+            title = parts.slice(1).join(' - ').trim();
+        }
+    }
+    const url = await fetchAlbumArt(title, artist, track.album, { force: true });
+    if (!url) return null;
+    let stored = url;
+    if (track.filepath) {
+        try {
+            stored = await invoke<string>('cache_remote_artwork', {
+                filepath: track.filepath,
+                url,
+            });
+        } catch {
+            stored = url;
+        }
+    }
+    const display =
+        (await resolveCoverForWebView(stored, url)) ||
+        coverSrcForUi(stored) ||
+        coverSrcForUi(url) ||
+        url;
+    onResolved?.(display, stored);
+    return display;
+}
+
+function normArtText(s: string): string {
+    return s
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+        .replace(/\b(feat\.?|ft\.?|with|official|audio|lyric[s]?|video|hd|hq|remaster(ed)?|mono|stereo)\b/g, ' ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function artScore(
+    candTitle: string,
+    candArtist: string,
+    candAlbum: string,
+    title: string,
+    artist: string,
+    album?: string,
+): number {
+    const t = normArtText(title);
+    const a = normArtText(artist);
+    const al = normArtText(album || '');
+    const ct = normArtText(candTitle);
+    const ca = normArtText(candArtist);
+    const cal = normArtText(candAlbum);
+    if (!ct && !ca && !cal) return -1;
+    let score = 0;
+    if (t && ct === t) score += 50;
+    else if (t && ct && (ct.includes(t) || t.includes(ct))) score += 28;
+    if (a && ca === a) score += 40;
+    else if (a && ca && (ca.includes(a) || a.includes(ca))) score += 22;
+    if (al) {
+        if (cal === al) score += 35;
+        else if (cal && (cal.includes(al) || al.includes(cal))) score += 18;
+        // Album grid cards pass album name as title — treat that as a strong album hit
+        if (ct === al || cal === t) score += 30;
+    }
+    // Accept artist-only or album-only hits (common for local files with messy titles)
+    if (score < 8) return -1;
+    return score;
+}
+
+/** Previous-build behaviour: first iTunes hit for "title artist". */
+async function fetchArtFromItunesSimple(title: string, artist: string): Promise<string | null> {
+    const term = `${title} ${artist}`.trim();
+    if (!term) return null;
+    try {
+        const res = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&limit=3&media=music`,
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        for (const row of data.results || []) {
+            const art = String(row.artworkUrl100 || '')
+                .replace('100x100bb', '600x600bb')
+                .replace('100x100', '600x600');
+            if (art) return art;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchArtFromItunes(title: string, artist: string, album?: string): Promise<string | null> {
+    const queries = [
+        album ? `${artist} ${album}` : '',
+        `${artist} ${title}`,
+        album ? `${album} ${artist}` : '',
+        album ? `${title} ${album}` : '',
+        title,
+    ].filter(Boolean);
+    let best: { score: number; url: string } | null = null;
+    let firstUrl: string | null = null;
+    for (const q of queries) {
+        try {
+            const res = await fetch(
+                `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&limit=8&media=music`,
+            );
+            if (!res.ok) continue;
+            const data = await res.json();
+            for (const row of data.results || []) {
+                const art = String(row.artworkUrl100 || '')
+                    .replace('100x100bb', '600x600bb')
+                    .replace('100x100', '600x600');
+                if (!art) continue;
+                if (!firstUrl) firstUrl = art;
+                const score = artScore(
+                    row.trackName || row.collectionName || '',
+                    row.artistName || '',
+                    row.collectionName || '',
+                    title,
+                    artist,
+                    album,
+                );
+                if (score < 0) continue;
+                if (!best || score > best.score) best = { score, url: art };
+            }
+            if (best && best.score >= 60) break;
+        } catch {
+            /* try next query */
+        }
+    }
+    return best?.url ?? firstUrl;
+}
+
+async function fetchArtFromDeezer(title: string, artist: string, album?: string): Promise<string | null> {
+    const q = album
+        ? `artist:"${artist}" album:"${album}"`
+        : `artist:"${artist}" track:"${title}"`;
+    try {
+        const res = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=8`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        let best: { score: number; url: string } | null = null;
+        for (const row of data.data || []) {
+            const score = artScore(
+                row.title || '',
+                row.artist?.name || '',
+                row.album?.title || '',
+                title,
+                artist,
+                album,
+            );
+            const art = row.album?.cover_xl || row.album?.cover_big || row.album?.cover_medium || '';
+            if (!art || score < 0) continue;
+            if (!best || score > best.score) best = { score, url: art };
+        }
+        return best?.url ?? null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchArtFromLastfm(title: string, artist: string, album?: string): Promise<string | null> {
+    const apiKey = '8c6cd0f902d698cec247211d0aaef717';
+    const pickImage = (images: any[] | undefined): string => {
+        if (!Array.isArray(images)) return '';
+        const order = ['extralarge', 'large', 'medium'];
+        for (const size of order) {
+            const hit = images.find((i) => i.size === size)?.['#text'];
+            if (hit && /^https?:\/\//i.test(hit)) return hit;
+        }
+        return '';
+    };
+    try {
+        if (album?.trim()) {
+            const url =
+                `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&api_key=${apiKey}` +
+                `&artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album)}&format=json`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const data = await res.json();
+                const img = pickImage(data?.album?.image);
+                if (img) return img;
+            }
+        }
+        const trackUrl =
+            `https://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key=${apiKey}` +
+            `&artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(title)}&format=json`;
+        const res = await fetch(trackUrl);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return pickImage(data?.track?.album?.image) || null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchArtFromItunesAlbum(artist: string, albumOrTitle: string): Promise<string | null> {
+    const term = `${artist} ${albumOrTitle}`.trim();
+    if (term.length < 2) return null;
+    try {
+        const res = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=album&limit=6&media=music`,
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        for (const row of data.results || []) {
+            const art = String(row.artworkUrl100 || '')
+                .replace('100x100bb', '600x600bb')
+                .replace('100x100', '600x600');
+            if (art) return art;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchArtFromItunesArtistOnly(artist: string): Promise<string | null> {
+    const a = artist.trim();
+    if (!a || /^unknown/i.test(a) || a.length < 2) return null;
+    try {
+        const res = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(a)}&entity=album&limit=5&media=music`,
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        for (const row of data.results || []) {
+            const ca = String(row.artistName || '');
+            if (normArtText(ca) !== normArtText(a) && !normArtText(ca).includes(normArtText(a))) continue;
+            const art = String(row.artworkUrl100 || '')
+                .replace('100x100bb', '600x600bb')
+                .replace('100x100', '600x600');
+            if (art) return art;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/** Cover Art Archive via MusicBrainz release search. */
+async function fetchArtFromMusicBrainz(
+    title: string,
+    artist: string,
+    album?: string,
+): Promise<string | null> {
+    const release = (album || title || '').trim();
+    const who = (artist || '').trim();
+    if (!release || !who) return null;
+    try {
+        const q = `release:"${release.replace(/"/g, '')}" AND artist:"${who.replace(/"/g, '')}"`;
+        const res = await fetch(
+            `https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=3`,
+            {
+                headers: {
+                    Accept: 'application/json',
+                    // MusicBrainz asks for an identifying UA
+                    'User-Agent': 'NekoBeat/0.3 (https://github.com/nishal21/nekobeat)',
+                },
+            },
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        const releases = data?.releases || [];
+        for (const rel of releases) {
+            const mbid = rel?.id;
+            if (!mbid) continue;
+            const artRes = await fetch(`https://coverartarchive.org/release/${mbid}/front-500`, {
+                redirect: 'follow',
+                headers: { Accept: 'application/json,image/*' },
+            });
+            // CAA may 307 to an actual image URL
+            if (artRes.ok || artRes.status === 307 || artRes.redirected) {
+                const finalUrl = artRes.url;
+                if (finalUrl && /^https?:\/\//i.test(finalUrl) && !finalUrl.includes('musicbrainz.org/ws')) {
+                    return finalUrl;
+                }
+            }
+            // JSON listing fallback
+            try {
+                const listRes = await fetch(`https://coverartarchive.org/release/${mbid}`, {
+                    headers: { Accept: 'application/json' },
+                });
+                if (!listRes.ok) continue;
+                const list = await listRes.json();
+                const front = (list.images || []).find((img: any) => img.front) || list.images?.[0];
+                const thumb = front?.thumbnails?.large || front?.thumbnails?.['500'] || front?.image;
+                if (thumb && /^https?:\/\//i.test(thumb)) return thumb;
+            } catch {
+                /* next release */
+            }
+        }
+        return null;
+    } catch {
+        return null;
+    }
 }
 
 export type LyricsData = {
@@ -996,12 +1634,13 @@ export function usePlayQueue() {
     const queueRef = useRef<QueueTrack[]>([]);
     const currentIndexRef = useRef(-1);
 
-    const replaceQueue = useCallback((tracks: QueueTrack[], startIndex = 0) => {
+    const replaceQueue = useCallback((tracks: QueueTrack[], startIndex = 0, opts?: { shuffle?: boolean }) => {
         const nextIndex = tracks.length === 0 ? -1 : Math.max(0, Math.min(startIndex, tracks.length - 1));
         queueRef.current = tracks;
         currentIndexRef.current = nextIndex;
         setQueue(tracks);
         setCurrentIndex(nextIndex);
+        setShuffleEnabled(!!opts?.shuffle);
     }, []);
 
     const playFromList = useCallback((tracks: QueueTrack[], startId?: string) => {
@@ -1018,6 +1657,8 @@ export function usePlayQueue() {
         currentIndexRef.current = nextIndex;
         setQueue(tracks);
         setCurrentIndex(nextIndex);
+        // Playing from library/search always starts in order unless user taps Shuffle
+        setShuffleEnabled(false);
         return tracks[idx] ?? null;
     }, []);
 
@@ -1088,6 +1729,11 @@ export function usePlayQueue() {
         const prev = queueRef.current;
         const ci = currentIndexRef.current;
         if (prev.length < 2) return;
+        // Toggle off — keep current order, just clear the shuffle flag
+        if (shuffleEnabled) {
+            setShuffleEnabled(false);
+            return;
+        }
         // Keep the currently playing item and history stable; only randomize Up next.
         const nextQueue = [...prev];
         for (let i = nextQueue.length - 1; i > ci + 1; i -= 1) {
@@ -1097,12 +1743,12 @@ export function usePlayQueue() {
         queueRef.current = nextQueue;
         setQueue(nextQueue);
         setShuffleEnabled(true);
-    }, []);
+    }, [shuffleEnabled]);
 
     const restoreQueue = useCallback((
         tracks: QueueTrack[],
         index: number,
-        restoredShuffleEnabled = false,
+        _restoredShuffleEnabled = false,
     ) => {
         const nextIndex = tracks.length === 0
             ? -1
@@ -1111,7 +1757,8 @@ export function usePlayQueue() {
         currentIndexRef.current = nextIndex;
         setQueue(tracks);
         setCurrentIndex(nextIndex);
-        setShuffleEnabled(restoredShuffleEnabled);
+        // Always resume in order — shuffle is an explicit user action
+        setShuffleEnabled(false);
     }, []);
 
     const peekNext = useCallback((loop = false): QueueTrack | null => {
@@ -1270,12 +1917,6 @@ export type LibrarySettings = {
     min_file_size_bytes: number;
 };
 
-function mergeLibraryTracks(prev: TrackData[], scanned: TrackData[]): TrackData[] {
-    const map = new Map(prev.map(t => [t.filepath, t]));
-    scanned.forEach(t => map.set(t.filepath, t));
-    return Array.from(map.values());
-}
-
 export function useLibrary() {
     const [tracks, setTracks] = useState<TrackData[]>([]);
     const [isScanning, setIsScanning] = useState(false);
@@ -1302,8 +1943,9 @@ export function useLibrary() {
     const scanDirectory = async (directory: string) => {
         setIsScanning(true);
         try {
-            const scanned = await invoke<TrackData[]>('scan_directory', { path: directory });
-            setTracks(prev => mergeLibraryTracks(prev, scanned));
+            await invoke<TrackData[]>('scan_directory', { path: directory });
+            const cached = await invoke<TrackData[]>('get_cached_tracks');
+            setTracks(cached);
             await loadLibrarySettings();
         } catch (e) {
             console.error("Failed to scan directory:", e);
@@ -1319,7 +1961,8 @@ export function useLibrary() {
         setIsScanning(true);
         try {
             const scanned = await invoke<TrackData[]>('import_audio_files', { paths });
-            setTracks(prev => mergeLibraryTracks(prev, scanned));
+            const cached = await invoke<TrackData[]>('get_cached_tracks');
+            setTracks(cached);
             return scanned;
         } catch (e) {
             console.error("Failed to import audio files:", e);
@@ -1334,10 +1977,28 @@ export function useLibrary() {
         setIsScanning(true);
         try {
             const scanned = await invoke<TrackData[]>('scan_device_music');
-            setTracks(prev => mergeLibraryTracks(prev, scanned));
+            const cached = await invoke<TrackData[]>('get_cached_tracks');
+            setTracks(cached);
             return scanned;
         } catch (e) {
             console.error("Failed to scan device music:", e);
+            throw e;
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    /** Re-walk known folders / device Music for newly added files. */
+    const refreshLibrary = async () => {
+        setIsScanning(true);
+        try {
+            const scanned = await invoke<TrackData[]>('refresh_library');
+            const cached = await invoke<TrackData[]>('get_cached_tracks');
+            setTracks(cached);
+            await loadLibrarySettings();
+            return scanned;
+        } catch (e) {
+            console.error("Failed to refresh library:", e);
             throw e;
         } finally {
             setIsScanning(false);
@@ -1375,7 +2036,7 @@ export function useLibrary() {
         await loadLibrarySettings();
     };
 
-    /** Merge cover / lyrics onto a library row (memory + SQLite). */
+    /** Merge cover / lyrics onto a library row (memory + SQLite). HTTP covers are cached to disk. */
     const patchTrack = (
         filepath: string,
         patch: { artwork_url?: string; local_lyrics?: string },
@@ -1391,6 +2052,33 @@ export function useLibrary() {
                     : t,
             ),
         );
+        const art = patch.artwork_url;
+        if (art && /^https?:\/\//i.test(art)) {
+            invoke<string>('cache_remote_artwork', { filepath, url: art })
+                .then((local) => {
+                    if (!local || local === art) return;
+                    setTracks((prev) =>
+                        prev.map((t) =>
+                            t.filepath === filepath ? { ...t, artwork_url: local } : t,
+                        ),
+                    );
+                })
+                .catch(() => {
+                    invoke('update_library_enrichment', {
+                        filepath,
+                        artworkUrl: art,
+                        localLyrics: patch.local_lyrics ?? null,
+                    }).catch((e) => console.warn('Library enrichment save failed', e));
+                });
+            if (patch.local_lyrics) {
+                invoke('update_library_enrichment', {
+                    filepath,
+                    artworkUrl: null,
+                    localLyrics: patch.local_lyrics,
+                }).catch(() => {});
+            }
+            return;
+        }
         invoke('update_library_enrichment', {
             filepath,
             artworkUrl: patch.artwork_url ?? null,
@@ -1409,6 +2097,7 @@ export function useLibrary() {
         scanDirectory,
         importAudioFiles,
         scanDeviceMusic,
+        refreshLibrary,
         clearLibrary,
         reindexLibrary,
         loadCachedTracks,
@@ -1511,25 +2200,42 @@ export function useLikedLibrary() {
     }, []);
 
     const toggleLike = async (track: any, currentLyrics?: string, playingLocalPath?: string | null) => {
-        const trackId = track.id || track.stream_url;
-        if (!trackId) return;
+        // Local library rows use filepath (no id). Android content:// paths also land here.
+        const trackId =
+            (track?.id && String(track.id).trim()) ||
+            (track?.stream_url && String(track.stream_url).trim()) ||
+            (track?.filepath && String(track.filepath).trim()) ||
+            (playingLocalPath && String(playingLocalPath).trim()) ||
+            '';
+        if (!trackId) {
+            console.warn('toggleLike: missing track id/filepath');
+            return;
+        }
+
+        const isLocal =
+            !track?.source ||
+            track.source === 'local' ||
+            trackId.startsWith('/') ||
+            trackId.startsWith('file:') ||
+            trackId.startsWith('content:') ||
+            /^[a-zA-Z]:[\\/]/.test(trackId);
 
         // Canonical source URL for re-resolve; prefer currently playing local file as stream_url
         // so offline copies the exact audio the user heard (correct YT match).
-        const id = track.id || '';
-        let canonicalUrl = track.stream_url;
-        if (track.source === 'youtube' || id.startsWith('yt-')) {
-            canonicalUrl = `https://www.youtube.com/watch?v=${id.replace('yt-', '')}`;
-        } else if (track.source === 'soundcloud' || id.startsWith('sc-')) {
-            canonicalUrl = `https://api-v2.soundcloud.com/tracks/${id.replace('sc-', '')}`;
-        } else if (track.source === 'spotify' || id.startsWith('sp-')) {
-            canonicalUrl = `https://open.spotify.com/track/${id.replace('sp-', '')}`;
+        const id = track.id || trackId;
+        let canonicalUrl = track.stream_url || track.filepath || trackId;
+        if (track.source === 'youtube' || String(id).startsWith('yt-')) {
+            canonicalUrl = `https://www.youtube.com/watch?v=${String(id).replace('yt-', '')}`;
+        } else if (track.source === 'soundcloud' || String(id).startsWith('sc-')) {
+            canonicalUrl = `https://api-v2.soundcloud.com/tracks/${String(id).replace('sc-', '')}`;
+        } else if (track.source === 'spotify' || String(id).startsWith('sp-')) {
+            canonicalUrl = `https://open.spotify.com/track/${String(id).replace('sp-', '')}`;
         }
 
         let streamUrlForLike = canonicalUrl;
-        let local = (playingLocalPath || '').trim();
+        let local = (playingLocalPath || track.filepath || '').trim();
         if (local && !/^https?:\/\//i.test(local) && !local.includes('googlevideo') && !local.includes('spotify.com')) {
-            if (local.startsWith('file:')) {
+            if (local.startsWith('file:') || local.startsWith('content:')) {
                 streamUrlForLike = local;
             } else if (/^[a-zA-Z]:[\\/]/.test(local) || local.startsWith('\\\\')) {
                 // Windows absolute path → file:///C:/...
@@ -1544,22 +2250,22 @@ export function useLikedLibrary() {
 
         setIsLiking(prev => ({ ...prev, [trackId]: true }));
         try {
-            await invoke<boolean>('toggle_like', { 
+            await invoke<boolean>('toggle_like', {
                 track: {
-                    id: track.id,
-                    title: track.title,
-                    artist: track.artist,
-                    album: track.album || "",
+                    id: trackId,
+                    title: track.title || 'Unknown',
+                    artist: track.artist || 'Unknown',
+                    album: track.album || '',
                     duration_ms: track.duration_ms || 0,
-                    artwork_url: track.artwork_url || "",
-                    source: track.source || "external",
-                    stream_url: streamUrlForLike
+                    artwork_url: track.artwork_url || '',
+                    source: track.source || (isLocal ? 'local' : 'external'),
+                    stream_url: streamUrlForLike,
                 },
-                lyrics: currentLyrics || null
+                lyrics: currentLyrics || null,
             });
             await loadLikedTracks();
         } catch (e) {
-            console.error("Failed to toggle like:", e);
+            console.error('Failed to toggle like:', e);
         } finally {
             setIsLiking(prev => ({ ...prev, [trackId]: false }));
         }

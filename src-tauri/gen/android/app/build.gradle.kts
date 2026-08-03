@@ -14,11 +14,6 @@ val tauriProperties = Properties().apply {
     }
 }
 
-val gstRoot: String = System.getenv("GSTREAMER_ROOT_ANDROID")
-    ?: (project.findProperty("gstAndroidRoot") as String?)
-    // rootProject = gen/android → ../../../vendor = repo root vendor/
-    ?: (rootProject.projectDir.resolve("../../../vendor").canonicalPath)
-
 android {
     compileSdk = 36
     namespace = "com.nishal21.nekobeat"
@@ -34,31 +29,10 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
-        externalNativeBuild {
-            ndkBuild {
-                arguments("GSTREAMER_ROOT_ANDROID=$gstRoot")
-            }
-        }
-    }
-    externalNativeBuild {
-        ndkBuild {
-            path = file("../../../android-gst/jni/Android.mk")
-        }
-    }
-    sourceSets {
-        getByName("main") {
-            java.srcDirs("../../../android-gst/java")
-            // Umbrella .so is installed under src/main/jniLibs by CI prebuild.
-            // Do NOT add android-gst/libs as jniLibs — Duplicate resources.
-        }
     }
     packaging {
         jniLibs {
-            // Safety net if Tauri + ndk-build both emit the same .so
-            pickFirsts += listOf(
-                "**/libgstreamer_android.so",
-                "**/libc++_shared.so",
-            )
+            pickFirsts += listOf("**/libc++_shared.so")
         }
     }
     val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -122,7 +96,13 @@ dependencies {
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
-    implementation("androidx.media:media:1.7.0")
+    val media3Version = "1.9.0"
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-session:$media3Version")
+    // Audio-only FFmpeg renderer. MediaCodec remains preferred; this handles formats such as
+    // ALAC, APE, WavPack and uncommon PCM variants when the device decoder cannot.
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
     implementation("com.google.android.material:material:1.12.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")

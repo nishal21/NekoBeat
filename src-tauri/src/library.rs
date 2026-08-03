@@ -1,13 +1,17 @@
+use lofty::config::ParseOptions;
 use lofty::file::{AudioFile, TaggedFile, TaggedFileExt};
 use lofty::picture::MimeType;
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey};
-use rusqlite::{params, Connection, Result as SqlResult};
+use rayon::prelude::*;
+use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tauri::Manager;
 use walkdir::WalkDir;
 
@@ -24,7 +28,7 @@ pub struct TrackData {
     pub local_lyrics: Option<String>,
     #[serde(default)]
     pub artwork_url: Option<String>,
-    /// Uppercase container/ext label, e.g. FLAC / MP3 (Harmonoid-style format chip)
+    /// Uppercase container/ext label, e.g. FLAC / MP3
     #[serde(default)]
     pub format: Option<String>,
     /// Audio bitrate in kbps when known
@@ -85,9 +89,8 @@ fn covers_dir(app: &tauri::AppHandle) -> PathBuf {
     dir
 }
 
-/// Harmonoid-style folder cover fallbacks next to the audio file.
-fn folder_cover_fallback(audio_path: &Path) -> Option<PathBuf> {
-    let dir = audio_path.parent()?;
+/// Folder cover fallbacks next to the audio file (cover.jpg, folder.png, …).
+fn folder_cover_in_dir(dir: &Path) -> Option<PathBuf> {
     const NAMES: &[&str] = &[
         "Folder.jpg",
         "Folder.png",
@@ -114,6 +117,88 @@ fn folder_cover_fallback(audio_path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Android often exposes the same tree as both `/sdcard/...` and `/storage/emulated/0/...`.
+fn normalize_library_path(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let mut normalized = raw;
+    for prefix in ["/sdcard", "/mnt/sdcard", "/storage/self/primary"] {
+        if let Some(rest) = normalized
+            .strip_prefix(prefix)
+            .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+        {
+            normalized = format!("/storage/emulated/0{rest}");
+            break;
+        }
+    }
+    while normalized.contains("//") {
+        normalized = normalized.replace("//", "/");
+    }
+    PathBuf::from(normalized)
+}
+
+fn file_identity(path: &Path) -> Option<(u64, i64)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    Some((meta.len(), mtime))
+}
+
+fn dedupe_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for root in roots {
+        let norm = normalize_library_path(&root);
+        let key = norm.to_string_lossy().to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(norm);
+        }
+    }
+    out
+}
+
+/// Collapse `/sdcard` vs `/storage/emulated/0` rows so each file appears once.
+fn collapse_duplicate_filepaths(conn: &Connection) -> SqlResult<usize> {
+    let paths: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT filepath FROM tracks")?;
+        let rows = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        rows
+    };
+    let mut removed = 0usize;
+    for path in paths {
+        let norm = normalize_library_path(Path::new(&path))
+            .to_string_lossy()
+            .into_owned();
+        if norm == path {
+            continue;
+        }
+        let canon_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM tracks WHERE filepath = ?1",
+                [&norm],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if canon_exists {
+            conn.execute("DELETE FROM tracks WHERE filepath = ?1", [&path])?;
+            removed += 1;
+        } else {
+            conn.execute(
+                "UPDATE tracks SET filepath = ?1 WHERE filepath = ?2",
+                params![norm, path],
+            )?;
+        }
+    }
+    Ok(removed)
+}
+
 fn picture_ext(mime: &MimeType) -> &'static str {
     match mime {
         MimeType::Jpeg => "jpg",
@@ -125,7 +210,7 @@ fn picture_ext(mime: &MimeType) -> &'static str {
     }
 }
 
-/// Extract first embedded picture into covers cache (Harmonoid embeds-at-index idea).
+/// Extract the first embedded picture into the covers cache.
 fn extract_embedded_cover(path: &Path, tagged: &TaggedFile, covers: &Path) -> Option<PathBuf> {
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
     let picture = tag.pictures().first()?;
@@ -160,11 +245,186 @@ fn extract_embedded_cover(path: &Path, tagged: &TaggedFile, covers: &Path) -> Op
     Some(out)
 }
 
-fn resolve_track_artwork(path: &Path, tagged: &TaggedFile, covers: &Path) -> Option<String> {
-    if let Some(embedded) = extract_embedded_cover(path, tagged, covers) {
-        return Some(embedded.to_string_lossy().into_owned());
+fn resolve_track_artwork(
+    path: &Path,
+    tagged: Option<&TaggedFile>,
+    covers: &Path,
+    read_embedded: bool,
+    folder_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Option<String> {
+    if let Some(dir) = path.parent() {
+        let folder = folder_cache
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| folder_cover_in_dir(dir))
+            .clone();
+        if let Some(folder) = folder {
+            return Some(folder.to_string_lossy().into_owned());
+        }
     }
-    folder_cover_fallback(path).map(|p| p.to_string_lossy().into_owned())
+    if read_embedded {
+        if let Some(tagged) = tagged {
+            if let Some(embedded) = extract_embedded_cover(path, tagged, covers) {
+                return Some(embedded.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+fn format_label(path: &Path) -> Option<String> {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_uppercase())
+        .filter(|s| !s.is_empty())
+}
+
+/// Sidecar `.lrc` next to the audio file.
+fn sidecar_lyrics(path: &Path) -> Option<String> {
+    for ext in ["lrc", "LRC"] {
+        let p = path.with_extension(ext);
+        if p.is_file() {
+            if let Ok(text) = fs::read_to_string(&p) {
+                let t = text.trim();
+                if !t.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn tag_lyrics(tag: Option<&lofty::tag::Tag>) -> Option<String> {
+    let tag = tag?;
+    tag.get_string(ItemKey::Lyrics)
+        .or_else(|| tag.get_string(ItemKey::UnsyncLyrics))
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn tag_number(tag: Option<&lofty::tag::Tag>, key: ItemKey) -> Option<f64> {
+    tag?.get_string(key)?
+        .trim()
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn extract_metadata(
+    path: &Path,
+    covers: &Path,
+    read_embedded_covers: bool,
+    folder_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Result<(TrackData, u64, i64), String> {
+    let path = normalize_library_path(path);
+    let (file_size, file_mtime) = file_identity(&path).ok_or_else(|| {
+        format!("Failed to stat file: {}", path.display())
+    })?;
+
+    let mut options = ParseOptions::new();
+    options = options.read_cover_art(read_embedded_covers);
+
+    let probe_result = match Probe::open(&path) {
+        Ok(probe) => match probe.options(options).guess_file_type() {
+            Ok(probe) => match probe.read() {
+                Ok(res) => res,
+                Err(e) => {
+                    return Err(format!("Failed to read tagged file: {}", e));
+                }
+            },
+            Err(e) => {
+                return Err(format!("Failed to identify audio file: {}", e));
+            }
+        },
+        Err(e) => {
+            return Err(format!("Failed to open file: {}", e));
+        }
+    };
+
+    let tag = probe_result
+        .primary_tag()
+        .or_else(|| probe_result.first_tag());
+
+    let title = tag
+        .and_then(|t| t.title().as_deref().map(|s| s.to_string()))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    let artist = tag
+        .and_then(|t| t.artist().as_deref().map(|s| s.to_string()))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Unknown Artist".into());
+    let album = tag
+        .and_then(|t| t.album().as_deref().map(|s| s.to_string()))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Unknown Album".into());
+    let album_artist = tag
+        .and_then(|t| t.get_string(ItemKey::AlbumArtist))
+        .map(str::to_owned)
+        .filter(|s| !s.trim().is_empty());
+    let props = probe_result.properties();
+    let duration_ms = props.duration().as_millis() as u64;
+    let bitrate_kbps = props
+        .audio_bitrate()
+        .or_else(|| props.overall_bitrate())
+        .filter(|&b| b > 0);
+    let sample_rate_hz = props.sample_rate().filter(|&r| r > 0);
+    let channels = props.channels().filter(|&c| c > 0);
+    let format = format_label(&path);
+    let artwork_url = resolve_track_artwork(
+        &path,
+        Some(&probe_result),
+        covers,
+        read_embedded_covers,
+        folder_cache,
+    );
+    let local_lyrics = sidecar_lyrics(&path).or_else(|| tag_lyrics(tag));
+    let genre = tag
+        .and_then(|t| t.genre().as_deref().map(str::to_owned))
+        .filter(|s| !s.trim().is_empty());
+    let track_number = tag.and_then(|t| t.track());
+    let disc_number = tag.and_then(|t| t.disk());
+    let year = tag
+        .and_then(|t| t.get_string(ItemKey::Year))
+        .and_then(|value| value.get(..4).unwrap_or(value).parse::<u32>().ok());
+    let date_added = chrono::Utc::now().timestamp();
+    let replaygain_track_gain = tag_number(tag, ItemKey::ReplayGainTrackGain);
+    let replaygain_track_peak = tag_number(tag, ItemKey::ReplayGainTrackPeak);
+    let replaygain_album_gain = tag_number(tag, ItemKey::ReplayGainAlbumGain);
+    let replaygain_album_peak = tag_number(tag, ItemKey::ReplayGainAlbumPeak);
+
+    Ok((
+        TrackData {
+            filepath: path.to_string_lossy().into_owned(),
+            title,
+            artist,
+            album,
+            album_artist,
+            duration_ms,
+            source: Some("local".to_string()),
+            local_lyrics,
+            artwork_url,
+            format,
+            bitrate_kbps,
+            sample_rate_hz,
+            channels,
+            genre,
+            track_number,
+            disc_number,
+            year,
+            date_added,
+            replaygain_track_gain,
+            replaygain_track_peak,
+            replaygain_album_gain,
+            replaygain_album_peak,
+        },
+        file_size,
+        file_mtime,
+    ))
 }
 
 fn migrate_legacy_cwd_db(dest: &Path) {
@@ -234,6 +494,8 @@ pub fn init_db(app: &tauri::AppHandle) -> SqlResult<Connection> {
     ensure_column(&conn, "replaygain_track_peak", "REAL")?;
     ensure_column(&conn, "replaygain_album_gain", "REAL")?;
     ensure_column(&conn, "replaygain_album_peak", "REAL")?;
+    ensure_column(&conn, "file_size", "INTEGER")?;
+    ensure_column(&conn, "file_mtime", "INTEGER")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS library_directories (
             path TEXT PRIMARY KEY,
@@ -252,6 +514,7 @@ pub fn init_db(app: &tauri::AppHandle) -> SqlResult<Connection> {
         "UPDATE tracks SET date_added = CAST(strftime('%s','now') AS INTEGER) WHERE date_added = 0",
         [],
     )?;
+    let _ = collapse_duplicate_filepaths(&conn);
 
     Ok(conn)
 }
@@ -273,200 +536,204 @@ fn ensure_column(conn: &Connection, name: &str, sql_type: &str) -> SqlResult<()>
 
 #[tauri::command]
 pub async fn scan_directory(app: tauri::AppHandle, path: String) -> Result<Vec<TrackData>, String> {
-    let mut tracks = Vec::new();
-    let conn = init_db(&app).map_err(|e| e.to_string())?;
-    let covers = covers_dir(&app);
-    let min_size = min_file_size(&conn);
-    let root = PathBuf::from(&path);
-    if !root.is_dir() {
-        return Err("Library directory does not exist".into());
-    }
-    conn.execute(
-        "INSERT OR IGNORE INTO library_directories (path) VALUES (?1)",
-        [root.to_string_lossy().as_ref()],
-    )
-    .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = init_db(&app).map_err(|e| e.to_string())?;
+        let covers = covers_dir(&app);
+        let min_size = min_file_size(&conn);
+        let root = normalize_library_path(Path::new(&path));
+        if !root.is_dir() {
+            return Err("Library directory does not exist".into());
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO library_directories (path) VALUES (?1)",
+            [root.to_string_lossy().as_ref()],
+        )
+        .map_err(|e| e.to_string())?;
 
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.is_file() && is_audio_ext(path) && meets_min_file_size(path, min_size) {
-            if let Ok(mut track) = extract_metadata(path, &covers) {
-                // Keep prior lyrics / cover if we already enriched this path
-                let mut stmt = conn
-                    .prepare("SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1")
-                    .map_err(|e| e.to_string())?;
-                if let Ok((lyrics, art)) = stmt.query_row(params![track.filepath], |row| {
+        let paths = collect_audio_paths(std::iter::once(root), min_size);
+        ingest_audio_paths(&conn, &covers, paths, true)
+    })
+    .await
+    .map_err(|e| format!("scan_directory join: {e}"))?
+}
+
+fn collect_audio_paths<I>(roots: I, min_size: u64) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+    for root in dedupe_roots(roots.into_iter().collect()) {
+        for entry in WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() || !is_audio_ext(path) || !meets_min_file_size(path, min_size) {
+                continue;
+            }
+            let norm = normalize_library_path(path);
+            let key = norm.to_string_lossy().to_ascii_lowercase();
+            if seen.insert(key) {
+                paths.push(norm);
+            }
+        }
+    }
+    paths
+}
+
+fn load_cached_track(conn: &Connection, filepath: &str) -> Option<TrackData> {
+    conn.query_row(
+        "SELECT filepath, title, artist, album, album_artist, duration_ms, local_lyrics, artwork_url, format, bitrate_kbps, sample_rate_hz, channels, genre, track_number, disc_number, year, date_added, replaygain_track_gain, replaygain_track_peak, replaygain_album_gain, replaygain_album_peak FROM tracks WHERE filepath = ?1",
+        [filepath],
+        |row| {
+            Ok(TrackData {
+                filepath: row.get(0)?,
+                title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                artist: row
+                    .get::<_, Option<String>>(2)?
+                    .unwrap_or_else(|| "Unknown Artist".into()),
+                album: row
+                    .get::<_, Option<String>>(3)?
+                    .unwrap_or_else(|| "Unknown Album".into()),
+                album_artist: row.get(4)?,
+                duration_ms: u64::try_from(row.get::<usize, i64>(5)?).unwrap_or(0),
+                source: Some("local".into()),
+                local_lyrics: row.get(6)?,
+                artwork_url: row.get(7)?,
+                format: row.get(8)?,
+                bitrate_kbps: row
+                    .get::<usize, Option<i64>>(9)?
+                    .and_then(|v| u32::try_from(v).ok()),
+                sample_rate_hz: row
+                    .get::<usize, Option<i64>>(10)?
+                    .and_then(|v| u32::try_from(v).ok()),
+                channels: row
+                    .get::<usize, Option<i64>>(11)?
+                    .and_then(|v| u8::try_from(v).ok()),
+                genre: row.get(12)?,
+                track_number: row
+                    .get::<usize, Option<i64>>(13)?
+                    .and_then(|v| u32::try_from(v).ok()),
+                disc_number: row
+                    .get::<usize, Option<i64>>(14)?
+                    .and_then(|v| u32::try_from(v).ok()),
+                year: row
+                    .get::<usize, Option<i64>>(15)?
+                    .and_then(|v| u32::try_from(v).ok()),
+                date_added: row.get(16)?,
+                replaygain_track_gain: row.get(17)?,
+                replaygain_track_peak: row.get(18)?,
+                replaygain_album_gain: row.get(19)?,
+                replaygain_album_peak: row.get(20)?,
+            })
+        },
+    )
+    .ok()
+}
+
+fn unchanged_cached_track(conn: &Connection, path: &Path, size: u64, mtime: i64) -> Option<TrackData> {
+    let filepath = path.to_string_lossy();
+    let row: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT COALESCE(file_size, -1), COALESCE(file_mtime, -1) FROM tracks WHERE filepath = ?1",
+            [filepath.as_ref()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    match row {
+        Some((stored_size, stored_mtime))
+            if stored_size >= 0
+                && stored_mtime >= 0
+                && stored_size as u64 == size
+                && stored_mtime == mtime =>
+        {
+            load_cached_track(conn, filepath.as_ref())
+        }
+        _ => None,
+    }
+}
+
+/// Fast bulk ingest: skip unchanged files, skip embedded cover decode, parallel tag reads.
+fn ingest_audio_paths(
+    conn: &Connection,
+    covers: &Path,
+    paths: Vec<PathBuf>,
+    read_embedded_covers: bool,
+) -> Result<Vec<TrackData>, String> {
+    let _ = collapse_duplicate_filepaths(conn);
+
+    let mut reuse = Vec::new();
+    let mut to_parse = Vec::new();
+    for path in paths {
+        match file_identity(&path) {
+            Some((size, mtime)) => {
+                if let Some(cached) = unchanged_cached_track(conn, &path, size, mtime) {
+                    // Re-parse when cover is missing so Refresh restores embedded / folder art
+                    if cached
+                        .artwork_url
+                        .as_ref()
+                        .map(|u| !u.trim().is_empty())
+                        .unwrap_or(false)
+                    {
+                        reuse.push(cached);
+                    } else {
+                        to_parse.push(path);
+                    }
+                } else {
+                    to_parse.push(path);
+                }
+            }
+            None => to_parse.push(path),
+        }
+    }
+
+    let covers_owned = covers.to_path_buf();
+    let parsed: Vec<(TrackData, u64, i64)> = to_parse
+        .par_iter()
+        .filter_map(|path| {
+            let mut folder_cache = HashMap::new();
+            extract_metadata(path, &covers_owned, read_embedded_covers, &mut folder_cache).ok()
+        })
+        .collect();
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut tracks = reuse;
+    for (mut track, size, mtime) in parsed {
+        if let Ok(Some((lyrics, art))) = tx
+            .query_row(
+                "SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1",
+                [&track.filepath],
+                |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
                         row.get::<_, Option<String>>(1)?,
                     ))
-                }) {
-                    if track.local_lyrics.is_none() {
-                        track.local_lyrics = lyrics;
-                    }
-                    if track.artwork_url.is_none() {
-                        track.artwork_url = art;
-                    }
-                }
-
-                upsert_track(&conn, &track).map_err(|e| e.to_string())?;
-                tracks.push(track);
+                },
+            )
+            .optional()
+        {
+            if track.local_lyrics.is_none() {
+                track.local_lyrics = lyrics;
+            }
+            if track.artwork_url.is_none() {
+                track.artwork_url = art;
             }
         }
+        upsert_track_with_identity(&tx, &track, size, mtime).map_err(|e| e.to_string())?;
+        tracks.push(track);
     }
+    tx.commit().map_err(|e| e.to_string())?;
 
+    // Stable unique list by normalized filepath.
+    let mut seen = HashSet::new();
+    tracks.retain(|t| seen.insert(normalize_library_path(Path::new(&t.filepath)).to_string_lossy().into_owned()));
     Ok(tracks)
 }
 
-fn format_label(path: &Path) -> Option<String> {
-    path.extension()
-        .map(|e| e.to_string_lossy().to_uppercase())
-        .filter(|s| !s.is_empty())
-}
-
-/// Harmonoid-style: sidecar `.lrc` next to the audio file.
-fn sidecar_lyrics(path: &Path) -> Option<String> {
-    for ext in ["lrc", "LRC"] {
-        let p = path.with_extension(ext);
-        if p.is_file() {
-            if let Ok(text) = fs::read_to_string(&p) {
-                let t = text.trim();
-                if !t.is_empty() {
-                    return Some(text);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn tag_lyrics(tag: Option<&lofty::tag::Tag>) -> Option<String> {
-    let tag = tag?;
-    tag.get_string(ItemKey::Lyrics)
-        .or_else(|| tag.get_string(ItemKey::UnsyncLyrics))
-        .map(|s| s.to_string())
-        .filter(|s| !s.trim().is_empty())
-}
-
-fn tag_number(tag: Option<&lofty::tag::Tag>, key: ItemKey) -> Option<f64> {
-    tag?.get_string(key)?
-        .trim()
-        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
-        .trim()
-        .parse()
-        .ok()
-}
-
-fn extract_metadata(path: &Path, covers: &Path) -> Result<TrackData, String> {
-    let probe_result = match Probe::open(path) {
-        Ok(probe) => match probe.guess_file_type() {
-            Ok(probe) => match probe.read() {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("Library: Failed to read tags for {:?}: {}", path, e);
-                    return Err(format!("Failed to read tagged file: {}", e));
-                }
-            },
-            Err(e) => {
-                eprintln!("Library: Failed to identify {:?}: {}", path, e);
-                return Err(format!("Failed to identify audio file: {}", e));
-            }
-        },
-        Err(e) => {
-            eprintln!("Library: Failed to open {:?}: {}", path, e);
-            return Err(format!("Failed to open file: {}", e));
-        }
-    };
-
-    let tag = probe_result
-        .primary_tag()
-        .or_else(|| probe_result.first_tag());
-    let has_tag = tag.is_some();
-
-    let title = tag
-        .and_then(|t| t.title().as_deref().map(|s| s.to_string()))
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| {
-            path.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-    let artist = tag
-        .and_then(|t| t.artist().as_deref().map(|s| s.to_string()))
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "Unknown Artist".into());
-    let album = tag
-        .and_then(|t| t.album().as_deref().map(|s| s.to_string()))
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "Unknown Album".into());
-    let album_artist = tag
-        .and_then(|t| t.get_string(ItemKey::AlbumArtist))
-        .map(str::to_owned)
-        .filter(|s| !s.trim().is_empty());
-    let props = probe_result.properties();
-    let duration_ms = props.duration().as_millis() as u64;
-    let bitrate_kbps = props
-        .audio_bitrate()
-        .or_else(|| props.overall_bitrate())
-        .filter(|&b| b > 0);
-    let sample_rate_hz = props.sample_rate().filter(|&r| r > 0);
-    let channels = props.channels().filter(|&c| c > 0);
-    let format = format_label(path);
-    let artwork_url = resolve_track_artwork(path, &probe_result, covers);
-    // Lyrics cascade: sidecar LRC → embedded tags (online fetch stays on FE)
-    let local_lyrics = sidecar_lyrics(path).or_else(|| tag_lyrics(tag));
-    let genre = tag
-        .and_then(|t| t.genre().as_deref().map(str::to_owned))
-        .filter(|s| !s.trim().is_empty());
-    let track_number = tag.and_then(|t| t.track());
-    let disc_number = tag.and_then(|t| t.disk());
-    let year = tag
-        .and_then(|t| t.get_string(ItemKey::Year))
-        .and_then(|value| value.get(..4).unwrap_or(value).parse::<u32>().ok());
-    let date_added = chrono::Utc::now().timestamp();
-    let replaygain_track_gain = tag_number(tag, ItemKey::ReplayGainTrackGain);
-    let replaygain_track_peak = tag_number(tag, ItemKey::ReplayGainTrackPeak);
-    let replaygain_album_gain = tag_number(tag, ItemKey::ReplayGainAlbumGain);
-    let replaygain_album_peak = tag_number(tag, ItemKey::ReplayGainAlbumPeak);
-
-    println!(
-        "Library: {:?} => has_tag={}, title='{}', artist='{}', {}ms, {:?}kbps, art={}, lyrics={}",
-        path.file_name().unwrap_or_default(),
-        has_tag,
-        title,
-        artist,
-        duration_ms,
-        bitrate_kbps,
-        artwork_url.as_deref().unwrap_or("-"),
-        local_lyrics.is_some()
-    );
-
-    Ok(TrackData {
-        filepath: path.to_string_lossy().into_owned(),
-        title,
-        artist,
-        album,
-        album_artist,
-        duration_ms,
-        source: Some("local".to_string()),
-        local_lyrics,
-        artwork_url,
-        format,
-        bitrate_kbps,
-        sample_rate_hz,
-        channels,
-        genre,
-        track_number,
-        disc_number,
-        year,
-        date_added,
-        replaygain_track_gain,
-        replaygain_track_peak,
-        replaygain_album_gain,
-        replaygain_album_peak,
-    })
-}
 
 #[tauri::command]
 pub fn get_cached_tracks(app: tauri::AppHandle) -> Result<Vec<TrackData>, String> {
@@ -536,9 +803,15 @@ pub fn get_cached_tracks(app: tauri::AppHandle) -> Result<Vec<TrackData>, String
         .map_err(|e| e.to_string())?;
 
     let mut tracks = Vec::new();
+    let mut seen = HashSet::new();
     for track in track_iter {
-        if let Ok(t) = track {
-            tracks.push(t);
+        if let Ok(mut t) = track {
+            t.filepath = normalize_library_path(Path::new(&t.filepath))
+                .to_string_lossy()
+                .into_owned();
+            if seen.insert(t.filepath.clone()) {
+                tracks.push(t);
+            }
         }
     }
 
@@ -558,45 +831,34 @@ pub fn clear_library(app: tauri::AppHandle) -> Result<usize, String> {
 #[tauri::command]
 pub fn reindex_library(app: tauri::AppHandle) -> Result<Vec<TrackData>, String> {
     let conn = init_db(&app).map_err(|e| e.to_string())?;
-    let paths: Vec<String> = {
+    let _ = collapse_duplicate_filepaths(&conn);
+    let paths: Vec<PathBuf> = {
         let mut stmt = conn
             .prepare("SELECT filepath FROM tracks")
             .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| row.get(0))
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?
             .filter_map(Result::ok)
             .collect();
-        rows
+        rows.into_iter()
+            .map(|p| normalize_library_path(Path::new(&p)))
+            .collect()
     };
     let covers = covers_dir(&app);
     let min_size = min_file_size(&conn);
-    let mut tracks = Vec::new();
-    for filepath in paths {
-        let path = Path::new(&filepath);
-        if !path.is_file() || !meets_min_file_size(path, min_size) {
-            conn.execute("DELETE FROM tracks WHERE filepath=?1", [&filepath])
-                .map_err(|e| e.to_string())?;
+    let mut kept = Vec::new();
+    for path in paths {
+        if !path.is_file() || !meets_min_file_size(&path, min_size) {
+            let _ = conn.execute(
+                "DELETE FROM tracks WHERE filepath=?1",
+                [path.to_string_lossy().as_ref()],
+            );
             continue;
         }
-        if let Ok(mut track) = extract_metadata(path, &covers) {
-            let prior: Option<(Option<String>, Option<String>, i64)> = conn
-                .query_row(
-                    "SELECT local_lyrics, artwork_url, date_added FROM tracks WHERE filepath=?1",
-                    [&filepath],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .ok();
-            if let Some((lyrics, artwork, date_added)) = prior {
-                track.local_lyrics = track.local_lyrics.or(lyrics);
-                track.artwork_url = track.artwork_url.or(artwork);
-                track.date_added = date_added;
-            }
-            upsert_track(&conn, &track).map_err(|e| e.to_string())?;
-            tracks.push(track);
-        }
+        kept.push(path);
     }
-    Ok(tracks)
+    ingest_audio_paths(&conn, &covers, kept, true)
 }
 
 fn is_audio_ext(path: &Path) -> bool {
@@ -646,9 +908,19 @@ fn meets_min_file_size(path: &Path, minimum: u64) -> bool {
 }
 
 fn upsert_track(conn: &Connection, track: &TrackData) -> SqlResult<()> {
+    let (size, mtime) = file_identity(Path::new(&track.filepath)).unwrap_or((0, 0));
+    upsert_track_with_identity(conn, track, size, mtime)
+}
+
+fn upsert_track_with_identity(
+    conn: &Connection,
+    track: &TrackData,
+    file_size: u64,
+    file_mtime: i64,
+) -> SqlResult<()> {
     conn.execute(
-        "INSERT INTO tracks (filepath, title, artist, album, album_artist, duration_ms, local_lyrics, artwork_url, format, bitrate_kbps, sample_rate_hz, channels, genre, track_number, disc_number, year, date_added, replaygain_track_gain, replaygain_track_peak, replaygain_album_gain, replaygain_album_peak)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+        "INSERT INTO tracks (filepath, title, artist, album, album_artist, duration_ms, local_lyrics, artwork_url, format, bitrate_kbps, sample_rate_hz, channels, genre, track_number, disc_number, year, date_added, replaygain_track_gain, replaygain_track_peak, replaygain_album_gain, replaygain_album_peak, file_size, file_mtime)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
          ON CONFLICT(filepath) DO UPDATE SET
            title=excluded.title, artist=excluded.artist, album=excluded.album,
            album_artist=COALESCE(excluded.album_artist, tracks.album_artist),
@@ -666,7 +938,9 @@ fn upsert_track(conn: &Connection, track: &TrackData) -> SqlResult<()> {
            replaygain_track_gain=COALESCE(excluded.replaygain_track_gain, tracks.replaygain_track_gain),
            replaygain_track_peak=COALESCE(excluded.replaygain_track_peak, tracks.replaygain_track_peak),
            replaygain_album_gain=COALESCE(excluded.replaygain_album_gain, tracks.replaygain_album_gain),
-           replaygain_album_peak=COALESCE(excluded.replaygain_album_peak, tracks.replaygain_album_peak)",
+           replaygain_album_peak=COALESCE(excluded.replaygain_album_peak, tracks.replaygain_album_peak),
+           file_size=excluded.file_size,
+           file_mtime=excluded.file_mtime",
         params![
             track.filepath,
             track.title,
@@ -689,14 +963,17 @@ fn upsert_track(conn: &Connection, track: &TrackData) -> SqlResult<()> {
             track.replaygain_track_peak,
             track.replaygain_album_gain,
             track.replaygain_album_peak,
+            file_size as i64,
+            file_mtime,
         ],
     )?;
     Ok(())
 }
 
 /// Save fetched cover / lyrics for a library row (title+artist enrichment).
+/// HTTP covers are downloaded into app `covers/` so they work offline forever.
 #[tauri::command]
-pub fn update_library_enrichment(
+pub async fn update_library_enrichment(
     app: tauri::AppHandle,
     filepath: String,
     artwork_url: Option<String>,
@@ -705,26 +982,215 @@ pub fn update_library_enrichment(
     if filepath.trim().is_empty() {
         return Err("empty filepath".into());
     }
-    let conn = init_db(&app).map_err(|e| e.to_string())?;
-    if let Some(ref url) = artwork_url {
-        if !url.trim().is_empty() {
+    let mut art = artwork_url;
+    if let Some(ref url) = art {
+        let trimmed = url.trim();
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            match cache_http_cover_to_disk(&app, trimmed).await {
+                Ok(local) => art = Some(local.to_string_lossy().into_owned()),
+                Err(e) => eprintln!("Library: cover cache failed (keeping URL): {}", e),
+            }
+        }
+    }
+    let art_for_db = art.clone();
+    let lyrics_for_db = local_lyrics.clone();
+    let fp = filepath.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = init_db(&app).map_err(|e| e.to_string())?;
+        if let Some(ref url) = art_for_db {
+            if !url.trim().is_empty() {
+                conn.execute(
+                    "UPDATE tracks SET artwork_url = ?1 WHERE filepath = ?2",
+                    params![url, fp],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(ref lyrics) = lyrics_for_db {
+            if !lyrics.trim().is_empty() {
+                conn.execute(
+                    "UPDATE tracks SET local_lyrics = ?1 WHERE filepath = ?2",
+                    params![lyrics, fp],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+/// Download a remote cover into app storage and point the library row at the local file.
+/// Returns the local filesystem path (stable offline).
+#[tauri::command]
+pub async fn cache_remote_artwork(
+    app: tauri::AppHandle,
+    filepath: String,
+    url: String,
+) -> Result<String, String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("empty url".into());
+    }
+    // Already a local cover / file path — just persist the pointer
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        if !filepath.trim().is_empty() {
+            let fp = filepath.clone();
+            let local = url.clone();
+            let app2 = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let conn = init_db(&app2).map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE tracks SET artwork_url = ?1 WHERE filepath = ?2",
+                    params![local, fp],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok::<(), String>(())
+            })
+            .await;
+        }
+        return Ok(url);
+    }
+
+    let local = cache_http_cover_to_disk(&app, &url).await?;
+    let local_str = local.to_string_lossy().into_owned();
+    if !filepath.trim().is_empty() {
+        let fp = filepath.clone();
+        let path_for_db = local_str.clone();
+        let app2 = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = init_db(&app2).map_err(|e| e.to_string())?;
             conn.execute(
                 "UPDATE tracks SET artwork_url = ?1 WHERE filepath = ?2",
-                params![url, filepath],
+                params![path_for_db, fp],
             )
             .map_err(|e| e.to_string())?;
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    Ok(local_str)
+}
+
+/// Read a local cover file into a data URL so the WebView can show it
+/// (Android asset protocol often fails for `/storage/...` and app covers dirs;
+/// Media3 still uses `file://` successfully outside the app).
+#[tauri::command]
+pub fn artwork_as_data_url(path: String) -> Result<String, String> {
+    let raw_in = path.trim();
+    if raw_in.is_empty() {
+        return Err("empty path".into());
+    }
+    let mut raw = raw_in.to_string();
+    if let Some(rest) = raw.strip_prefix("file:") {
+        // file:///data/... or file://localhost/data/...
+        let rest = rest.trim_start_matches('/');
+        let rest = rest.strip_prefix("localhost/").unwrap_or(rest);
+        // Windows drive: C:/...
+        if rest.len() >= 2 && rest.as_bytes().get(1) == Some(&b':') {
+            raw = rest.to_string();
+        } else {
+            raw = format!("/{rest}");
         }
     }
-    if let Some(ref lyrics) = local_lyrics {
-        if !lyrics.trim().is_empty() {
-            conn.execute(
-                "UPDATE tracks SET local_lyrics = ?1 WHERE filepath = ?2",
-                params![lyrics, filepath],
-            )
-            .map_err(|e| e.to_string())?;
+
+    let p = PathBuf::from(&raw);
+    if !p.is_file() {
+        return Err(format!("not a file: {raw}"));
+    }
+    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    if meta.len() > 6_000_000 {
+        return Err("cover too large".into());
+    }
+    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+    if bytes.is_empty() {
+        return Err("empty cover".into());
+    }
+    let mime = match p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => {
+            if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+                "image/png"
+            } else if bytes.len() > 11 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+                "image/webp"
+            } else {
+                "image/jpeg"
+            }
+        }
+    };
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+async fn cache_http_cover_to_disk(app: &tauri::AppHandle, url: &str) -> Result<PathBuf, String> {
+    let covers = covers_dir(app);
+    let mut hasher = Sha1::new();
+    hasher.update(url.as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    let stem = format!("remote_{}", &digest[..16.min(digest.len())]);
+
+    // Reuse existing download
+    for ext in ["jpg", "jpeg", "png", "webp", "gif"] {
+        let existing = covers.join(format!("{}.{}", stem, ext));
+        if existing.is_file() {
+            return Ok(existing);
         }
     }
-    Ok(())
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("cover download: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("cover HTTP {}", resp.status()));
+    }
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    let ext = if content_type.contains("png") {
+        "png"
+    } else if content_type.contains("webp") {
+        "webp"
+    } else if content_type.contains("gif") {
+        "gif"
+    } else {
+        "jpg"
+    };
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("cover body: {e}"))?;
+    if bytes.len() < 200 {
+        return Err("cover too small".into());
+    }
+    let path = covers.join(format!("{}.{}", stem, ext));
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| format!("cover write: {e}"))?;
+    println!("Library: cached cover -> {:?}", path);
+    Ok(path)
 }
 
 /// Import individual audio files (mobile file picker — no folder walk).
@@ -733,177 +1199,175 @@ pub async fn import_audio_files(
     app: tauri::AppHandle,
     paths: Vec<String>,
 ) -> Result<Vec<TrackData>, String> {
-    let conn = init_db(&app).map_err(|e| e.to_string())?;
-    let covers = covers_dir(&app);
-    let import_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("library_import");
-    let _ = fs::create_dir_all(&import_dir);
-    let mut tracks = Vec::new();
-    let min_size = min_file_size(&conn);
-    let mut seen_inputs = std::collections::HashSet::new();
-    let mut seen_paths = std::collections::HashSet::new();
-    for raw in paths {
-        let trimmed = raw.trim().to_string();
-        if trimmed.is_empty() || !seen_inputs.insert(trimmed.clone()) {
-            continue;
-        }
-        let is_content_uri = trimmed.starts_with("content:");
-        let path = {
-            #[cfg(target_os = "android")]
-            {
-                if trimmed.starts_with("content:") {
-                    match crate::android_content::materialize_content_uri(&trimmed, &import_dir) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("Library: content URI copy failed: {}", e);
-                            continue;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = init_db(&app).map_err(|e| e.to_string())?;
+        let covers = covers_dir(&app);
+        let import_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("library_import");
+        let _ = fs::create_dir_all(&import_dir);
+        let min_size = min_file_size(&conn);
+        let mut seen_inputs = HashSet::new();
+        let mut resolved = Vec::new();
+        for raw in paths {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() || !seen_inputs.insert(trimmed.clone()) {
+                continue;
+            }
+            let is_content_uri = trimmed.starts_with("content:");
+            let path = {
+                #[cfg(target_os = "android")]
+                {
+                    if trimmed.starts_with("content:") {
+                        match crate::android_content::materialize_content_uri(&trimmed, &import_dir)
+                        {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("Library: content URI copy failed: {}", e);
+                                continue;
+                            }
                         }
+                    } else {
+                        PathBuf::from(&trimmed)
                     }
-                } else {
+                }
+                #[cfg(not(target_os = "android"))]
+                {
                     PathBuf::from(&trimmed)
                 }
+            };
+            if !path.is_file() {
+                continue;
             }
-            #[cfg(not(target_os = "android"))]
-            {
-                PathBuf::from(&trimmed)
+            if !is_audio_ext(&path) && !is_content_uri {
+                continue;
             }
-        };
-        if !path.is_file() {
-            eprintln!("Library: skip missing file {:?}", path);
-            continue;
-        }
-        if !is_audio_ext(&path) && !is_content_uri {
-            continue;
-        }
-        if !meets_min_file_size(&path, min_size) {
-            continue;
-        }
-        if !seen_paths.insert(path.clone()) {
-            continue;
-        }
-        match extract_metadata(&path, &covers) {
-            Ok(mut track) => {
-                let mut stmt = conn
-                    .prepare("SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1")
-                    .map_err(|e| e.to_string())?;
-                if let Ok((lyrics, art)) = stmt.query_row(params![track.filepath], |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                }) {
-                    if track.local_lyrics.is_none() {
-                        track.local_lyrics = lyrics;
-                    }
-                    if track.artwork_url.is_none() {
-                        track.artwork_url = art;
-                    }
-                }
-                upsert_track(&conn, &track).map_err(|e| e.to_string())?;
-                tracks.push(track);
+            if !meets_min_file_size(&path, min_size) {
+                continue;
             }
-            Err(e) => eprintln!("Library: import failed {:?}: {}", path, e),
+            resolved.push(normalize_library_path(&path));
         }
-    }
-    println!("Library: imported {} file(s)", tracks.len());
-    Ok(tracks)
+        let tracks = ingest_audio_paths(&conn, &covers, resolved, true)?;
+        println!("Library: imported {} file(s)", tracks.len());
+        Ok(tracks)
+    })
+    .await
+    .map_err(|e| format!("import_audio_files join: {e}"))?
 }
 
 /// Scan common device music folders (Android Music / Download). Needs READ_MEDIA_AUDIO.
 #[tauri::command]
 pub async fn scan_device_music(app: tauri::AppHandle) -> Result<Vec<TrackData>, String> {
-    let mut roots: Vec<PathBuf> = Vec::new();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut roots: Vec<PathBuf> = Vec::new();
 
-    #[cfg(target_os = "android")]
-    {
-        for p in [
-            "/storage/emulated/0/Music",
-            "/storage/emulated/0/Download",
-            "/storage/emulated/0/Podcasts",
-            "/storage/emulated/0/Audiobooks",
-            "/sdcard/Music",
-            "/sdcard/Download",
-        ] {
-            let pb = PathBuf::from(p);
-            if pb.is_dir() {
-                roots.push(pb);
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-            for sub in ["Music", "Downloads", "Download"] {
-                let pb = PathBuf::from(&home).join(sub);
+        #[cfg(target_os = "android")]
+        {
+            // Only storage/emulated roots — /sdcard is the same tree and caused duplicates.
+            for p in [
+                "/storage/emulated/0/Music",
+                "/storage/emulated/0/Download",
+                "/storage/emulated/0/Podcasts",
+                "/storage/emulated/0/Audiobooks",
+            ] {
+                let pb = PathBuf::from(p);
                 if pb.is_dir() {
                     roots.push(pb);
                 }
             }
         }
-    }
 
-    if roots.is_empty() {
-        return Err(
-            "No Music/Download folder found. Grant audio permission, or use Add songs to pick files."
-                .into(),
-        );
-    }
-
-    let conn = init_db(&app).map_err(|e| e.to_string())?;
-    let covers = covers_dir(&app);
-    let min_size = min_file_size(&conn);
-    let mut tracks = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    for root in roots {
-        println!("Library: scanning device music root {:?}", root);
-        for entry in WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
+        #[cfg(not(target_os = "android"))]
         {
-            let path = entry.path();
-            if !path.is_file() || !is_audio_ext(path) || !meets_min_file_size(path, min_size) {
-                continue;
-            }
-            let key = path.to_string_lossy().to_string();
-            if !seen.insert(key) {
-                continue;
-            }
-            if let Ok(mut track) = extract_metadata(path, &covers) {
-                let mut stmt = conn
-                    .prepare("SELECT local_lyrics, artwork_url FROM tracks WHERE filepath = ?1")
-                    .map_err(|e| e.to_string())?;
-                if let Ok((lyrics, art)) = stmt.query_row(params![track.filepath], |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                }) {
-                    if track.local_lyrics.is_none() {
-                        track.local_lyrics = lyrics;
-                    }
-                    if track.artwork_url.is_none() {
-                        track.artwork_url = art;
+            if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+                for sub in ["Music", "Downloads", "Download"] {
+                    let pb = PathBuf::from(&home).join(sub);
+                    if pb.is_dir() {
+                        roots.push(pb);
                     }
                 }
-                upsert_track(&conn, &track).map_err(|e| e.to_string())?;
-                tracks.push(track);
             }
         }
-    }
 
-    if tracks.is_empty() {
-        return Err(
-            "No audio files found in Music/Download. Try Add songs and pick files manually.".into(),
-        );
-    }
-    println!("Library: device scan found {} track(s)", tracks.len());
-    Ok(tracks)
+        roots = dedupe_roots(roots);
+        if roots.is_empty() {
+            return Err(
+                "No Music/Download folder found. Grant audio permission, or use Add songs to pick files."
+                    .into(),
+            );
+        }
+
+        let conn = init_db(&app).map_err(|e| e.to_string())?;
+        let covers = covers_dir(&app);
+        let min_size = min_file_size(&conn);
+        let paths = collect_audio_paths(roots, min_size);
+        let tracks = ingest_audio_paths(&conn, &covers, paths, true)?;
+        if tracks.is_empty() {
+            return Err(
+                "No audio files found in Music/Download. Try Add songs and pick files manually."
+                    .into(),
+            );
+        }
+        println!("Library: device scan found {} track(s)", tracks.len());
+        Ok(tracks)
+    })
+    .await
+    .map_err(|e| format!("scan_device_music join: {e}"))?
+}
+
+/// Re-walk saved folders (desktop) and/or device Music/Download (Android) for new files.
+#[tauri::command]
+pub async fn refresh_library(app: tauri::AppHandle) -> Result<Vec<TrackData>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = init_db(&app).map_err(|e| e.to_string())?;
+        let covers = covers_dir(&app);
+        let min_size = min_file_size(&conn);
+        let mut roots: Vec<PathBuf> = {
+            let mut stmt = conn
+                .prepare("SELECT path FROM library_directories")
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(Result::ok)
+                .collect();
+            rows.into_iter()
+                .map(|p| normalize_library_path(Path::new(&p)))
+                .filter(|p| p.is_dir())
+                .collect()
+        };
+
+        #[cfg(target_os = "android")]
+        {
+            for p in [
+                "/storage/emulated/0/Music",
+                "/storage/emulated/0/Download",
+                "/storage/emulated/0/Podcasts",
+                "/storage/emulated/0/Audiobooks",
+            ] {
+                let pb = PathBuf::from(p);
+                if pb.is_dir() {
+                    roots.push(pb);
+                }
+            }
+        }
+
+        roots = dedupe_roots(roots);
+        if roots.is_empty() {
+            return Err(
+                "No music folders to refresh. Scan music or add a folder first.".into(),
+            );
+        }
+
+        let paths = collect_audio_paths(roots, min_size);
+        let tracks = ingest_audio_paths(&conn, &covers, paths, true)?;
+        println!("Library: refresh found {} track(s)", tracks.len());
+        Ok(tracks)
+    })
+    .await
+    .map_err(|e| format!("refresh_library join: {e}"))?
 }
 
 #[tauri::command]

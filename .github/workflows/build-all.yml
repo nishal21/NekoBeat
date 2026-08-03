@@ -1,0 +1,275 @@
+# Build desktop (Win / Linux / macOS) + Android APK and upload Actions artifacts.
+# Does NOT create a GitHub Release (use Release workflow / tags for that).
+#
+# Triggers: Actions → Build all platforms → Run workflow
+# Also runs on push to main/master (can cancel via concurrency).
+
+name: Build all platforms
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: 'Build Android APK'
+        type: boolean
+        default: true
+      build_desktop:
+        description: 'Build desktop installers'
+        type: boolean
+        default: true
+  # Optional: also build when you push a version tag (Release workflow still publishes)
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: build-all-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_desktop }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.ci.conf.json
+            rust_targets: ''
+            artifact: nekobeat-windows
+          - platform: ubuntu-22.04
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.linux.conf.json
+              --config src-tauri/tauri.ci.conf.json
+            rust_targets: ''
+            artifact: nekobeat-linux
+          - platform: macos-latest
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.macos.conf.json
+              --config src-tauri/tauri.ci.conf.json
+              --target aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+            artifact: nekobeat-macos-arm64
+          - platform: macos-15-intel
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.macos.conf.json
+              --config src-tauri/tauri.ci.conf.json
+              --target x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+            artifact: nekobeat-macos-x64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Linux system deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libxdo-dev libssl-dev libunwind-dev libasound2-dev \
+            build-essential curl wget file \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav gstreamer1.0-tools
+
+      - name: macOS GStreamer
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          brew update
+          brew install gstreamer pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix gstreamer)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Windows GStreamer (MSI) + stage into src-tauri/gstreamer
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $ver = '1.26.5'
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
+          curl.exe -fsSL --retry 3 -o runtime.msi "$base/gstreamer-1.0-msvc-x86_64-$ver.msi"
+          curl.exe -fsSL --retry 3 -o devel.msi "$base/gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
+          function Install-Msi([string]$Msi, [string]$Log) {
+            $p = Start-Process msiexec.exe -ArgumentList @(
+              '/i', (Resolve-Path $Msi).Path, '/qn', '/norestart',
+              'INSTALLDIR=C:\gstreamer', "/L*v", $Log
+            ) -PassThru -NoNewWindow
+            if (-not $p.WaitForExit(600000)) { throw "msiexec timeout $Msi" }
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec $($p.ExitCode) $Msi" }
+          }
+          Install-Msi 'runtime.msi' 'gst-runtime.log'
+          Install-Msi 'devel.msi' 'gst-devel.log'
+          $root = 'C:\gstreamer\1.0\msvc_x86_64'
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root\" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "$root\bin" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+          choco install pkgconfiglite -y --no-progress
+          & .\scripts\stage-gstreamer-windows.ps1 -GstRoot $root
+
+      - name: Fetch yt-dlp (Unix)
+        if: matrix.platform != 'windows-latest'
+        run: |
+          mkdir -p src-tauri/bin
+          OS=$(uname -s)
+          if [ "$OS" = "Darwin" ]; then
+            curl -fsSL --retry 3 -o src-tauri/bin/yt-dlp \
+              https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+          else
+            curl -fsSL --retry 3 -o src-tauri/bin/yt-dlp \
+              https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux
+          fi
+          chmod +x src-tauri/bin/yt-dlp src-tauri/binaries/spotiflac-cli-* || true
+
+      - name: Fetch yt-dlp (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
+          curl.exe -fsSL --retry 3 -o src-tauri/bin/yt-dlp.exe `
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+          if (-not (Test-Path 'src-tauri/binaries/spotiflac-cli-x86_64-pc-windows-msvc.exe')) {
+            throw 'Missing Windows spotiflac-cli in src-tauri/binaries/'
+          }
+
+      - run: npm ci
+
+      - name: Tauri build
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          uploadReleaseAssets: false
+          uploadWorkflowArtifacts: false
+          args: ${{ matrix.args }}
+
+      - name: Collect desktop artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # Windows
+          find src-tauri/target -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.nsis.zip' \) 2>/dev/null \
+            | grep -E '/(release|bundle)/' | while read -r f; do cp -f "$f" out/; done || true
+          # Linux
+          find src-tauri/target -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) 2>/dev/null \
+            | while read -r f; do cp -f "$f" out/; done || true
+          # macOS
+          find src-tauri/target -type f \( -name '*.dmg' -o -name '*.app.tar.gz' \) 2>/dev/null \
+            | while read -r f; do cp -f "$f" out/; done || true
+          ls -lah out/ || true
+          test "$(find out -type f | wc -l)" -gt 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_android }}
+    runs-on: ubuntu-22.04
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK + platform
+        run: |
+          sdkmanager --install "ndk;27.0.12077973" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Host helpers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config unzip curl
+
+      - name: Android SDK path
+        run: |
+          mkdir -p src-tauri/gen/android
+          echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
+          sed -i '/^gstAndroidRoot=/d' src-tauri/gen/android/gradle.properties || true
+
+      - run: npm ci
+
+      - name: Ensure Android project
+        run: |
+          test -f src-tauri/gen/android/app/build.gradle.kts || {
+            echo '::error::Commit src-tauri/gen/android (Media3 project)'; exit 1;
+          }
+
+      - run: bash scripts/sync-android-icons.sh
+
+      - name: Configure signing (secrets or ephemeral)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/ci-android-signing.sh
+
+      - name: Build Android APK (aarch64)
+        env:
+          PKG_CONFIG_SYSROOT_DIR: ''
+          PKG_CONFIG_PATH: ''
+        run: npm run tauri:android:build
+
+      - name: Stage APK
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f ! -name '*unsigned*' | sort)
+          test "${#APKS[@]}" -gt 0
+          for apk in "${APKS[@]}"; do
+            cp -f "$apk" "out/$(basename "$apk")"
+            bash scripts/verify-android-media3-apk.sh "$apk" || true
+          done
+          ls -lah out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nekobeat-android-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 14

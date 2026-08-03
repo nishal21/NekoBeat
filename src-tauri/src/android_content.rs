@@ -1,5 +1,5 @@
 //! Copy Android `content://` URIs into app-private storage so GStreamer can play them.
-//! Harmonoid-style: materialize a real path before the audio engine sees the file.
+//! Materialize a real filesystem path before the audio engine sees the file.
 
 #![cfg(target_os = "android")]
 
@@ -17,7 +17,11 @@ fn guess_ext(uri: &str, mime: &str) -> &'static str {
         "flac"
     } else if lower.contains("mpeg") || lower.contains(".mp3") {
         "mp3"
-    } else if lower.contains("mp4") || lower.contains("m4a") || lower.contains("aac") || lower.contains("alac") {
+    } else if lower.contains("mp4")
+        || lower.contains("m4a")
+        || lower.contains("aac")
+        || lower.contains("alac")
+    {
         "m4a"
     } else if lower.contains("opus") {
         "opus"
@@ -52,15 +56,19 @@ pub fn materialize_content_uri(uri: &str, dest_dir: &Path) -> Result<PathBuf, St
     fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
 
     let ctx = ndk_context::android_context();
-    let vm =
-        unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("JavaVM: {}", e))?;
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("JavaVM: {}", e))?;
     let mut env = vm
         .attach_current_thread()
         .map_err(|e| format!("attach: {}", e))?;
     let context = unsafe { JObject::from_raw(ctx.context() as jni::sys::jobject) };
 
     let resolver = env
-        .call_method(&context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
+        .call_method(
+            &context,
+            "getContentResolver",
+            "()Landroid/content/ContentResolver;",
+            &[],
+        )
         .map_err(|e| format!("getContentResolver: {}", e))?
         .l()
         .map_err(|e| format!("resolver obj: {}", e))?;
@@ -126,12 +134,7 @@ pub fn materialize_content_uri(uri: &str, dest_dir: &Path) -> Result<PathBuf, St
         let mut file = File::create(&out_path).map_err(|e| e.to_string())?;
         loop {
             let n = env
-                .call_method(
-                    &stream,
-                    "read",
-                    "([B)I",
-                    &[JValue::from(&jbuf)],
-                )
+                .call_method(&stream, "read", "([B)I", &[JValue::from(&jbuf)])
                 .map_err(|e| format!("InputStream.read: {}", e))?
                 .i()
                 .map_err(|e| format!("read int: {}", e))?;

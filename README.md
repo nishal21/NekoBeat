@@ -131,6 +131,18 @@ Or grab a build from [Releases](https://github.com/nishal21/NekoBeat/releases/la
 
 ### Build from source
 
+**CI / GitHub Actions**
+
+| Workflow | When | What |
+|----------|------|------|
+| **CI** | push / PR to `main` | Frontend build + Linux `cargo check` |
+| **Build all platforms** | push to `main`, or Actions → Run workflow | Windows / Linux / macOS installers + Android APK → **Artifacts** |
+| **Release** | tag `v*` or Run workflow | Signed desktop + APK uploaded to a **GitHub Release** |
+
+Secrets for signed releases: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, optional `ANDROID_KEYSTORE_*`.
+
+Do **not** commit: `cookies.txt`, `.tauri/*.key`, `src-tauri/gstreamer/` (staged in CI), `yt-dlp` binaries, `*.apk`, or `libnekobeat_lib.so`.
+
 **Prerequisites:**
 
 - [Node.js](https://nodejs.org/) (LTS)
@@ -180,12 +192,12 @@ nekobeat/
 
 NekoBeat borrows ideas and patterns from these projects:
 
-- [Harmonoid](https://github.com/harmonoid/harmonoid) — Inspiration for Flutter music player; UI and local library ideas
+- [Harmonoid](https://github.com/harmonoid/harmonoid) — local library and lyrics UX patterns we studied early on
 - [Muffon](https://github.com/staniel359/muffon) — multi-source streaming client; aggregation shape
 - [Muffon API](https://github.com/staniel359/muffon-api) — backend patterns for multi-source search
-- [SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC) — optional desktop Spotify → lossless helper; Android uses NekoBeat's standard streaming resolver without a Go runtime
+- [SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC) — optional desktop Spotify to lossless helper; Android uses NekoBeat's streaming resolver without a Go runtime
 - [Spotify Lyrics API](https://github.com/akashrchandran/spotify-lyrics-api) — synced lyrics from Spotify
-- [MusicXMatch API](https://github.com/Fabrice-Music/musicxmatch-api) — Musixmatch wrapper referenced for lyrics work
+- [MusicXMatch API](https://github.com/Fabrice-Music/musicxmatch-api) — Musixmatch wrapper used during lyrics work
 
 Thanks to everyone who maintains those projects.
 

@@ -6,55 +6,95 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+cargo-android-build.log
+gradle-*.log
+device-log*.txt
+crash.txt
 
+# Dependencies / frontend build
 node_modules
 dist
 dist-ssr
 *.local
 
-# Rust
+# Rust / Cargo
 /target/
 /src-tauri/target/
+/src-tauri/target-android/
+**/target/
 # Cargo.lock is committed for reproducible CI (binary app)
 
-
-# Tauri Bundles
+# Tauri / packaging outputs
 /src-tauri/target/release/bundle/
 /bundle/
+release/
+*.msi
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.apk
+*.aab
+*.sig
+*.nsis.zip
 
-# VS Code / Cursor
-.vscode/*
-!.vscode/extensions.json
-cookies.txt
-.cursor/
+# Local Windows GStreamer runtime (CI stages from MSI; do not commit ~300MB DLLs)
+/src-tauri/gstreamer/
 
-# graphify
-graphify-out/
-src-tauri/src/graphify-out/
+# yt-dlp binaries fetched in CI / locally
+/src-tauri/bin/yt-dlp
+/src-tauri/bin/yt-dlp.exe
+# Duplicate SpotiFLAC copies under bin/ — keep only src-tauri/binaries/
+/src-tauri/bin/spotiflac-cli-*
 
-# Updater signing keys (NEVER commit the private key!)
-.tauri/nekobeat.key
-.tauri/nekobeat.key.bak
-.tauri/PUT_THESE_IN_GITHUB_SECRETS.txt
-latest.json
-
-# CI-built GStreamer Android umbrella (.so)
+# Android build junk
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/**/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/**/jniLibs/**/libnekobeat_lib.so
 src-tauri/android-gst/libs/
 src-tauri/android-gst/link/
 src-tauri/android-gst/obj/
 src-tauri/android-gst/jni/gst-android-build/
-
-# Android SpotiFLAC / ffmpeg / yt-dlp staging (fetched in CI)
 src-tauri/android-sidecars/
 vendor/SpotiFLAC/
 src-tauri/gen/android/app/src/main/jniLibs/**/libffmpeg.so
 src-tauri/gen/android/app/src/main/jniLibs/**/libffprobe.so
 src-tauri/gen/android/app/src/main/jniLibs/**/libytdlp.so
+*.keystore
+*.jks
+
+# Secrets — NEVER commit
+cookies.txt
+.env
+.env.*
+!.env.example
+.tauri/nekobeat.key
+.tauri/nekobeat.key.bak
+.tauri/PUT_THESE_IN_GITHUB_SECRETS.txt
+latest.json
+**/credentials.json
+**/service-account*.json
+
+# Editor / agent
+.vscode/*
+!.vscode/extensions.json
+.cursor/
+.idea/
+*.swp
+*.swo
+
+# graphify
+graphify-out/
+src-tauri/src/graphify-out/
+**/graphify-out/
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-docs
-
-
+# Local docs scratch (keep in-repo docs/ if you want — currently unused)
+# docs/

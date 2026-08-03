@@ -1,7 +1,6 @@
-//! Harmonoid-style lyrics disk cache: `app_data/Lyrics/<sha256(key)>.lrc`
+//! Local lyrics disk cache: `app_data/Lyrics/<sha256(key)>.lrc`
 //!
-//! Independent of Harmonoid’s cloud API — pure local files so lyrics keep
-//! working offline and never break if a third-party endpoint disappears.
+//! Plain files on disk so lyrics still open offline.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,7 +8,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
-/// Rough equivalent of Harmonoid `Lrc.isValid` — timed `[mm:ss.xx]` lines.
+/// True when the text has timed `[mm:ss.xx]` LRC lines.
 pub fn looks_synced(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() {

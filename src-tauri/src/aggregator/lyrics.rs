@@ -1,15 +1,13 @@
-//! Unified lyrics resolver — Harmonoid *method*, NekoBeat *sources*.
+//! Unified lyrics resolver for NekoBeat.
 //!
-//! Same cascade as Harmonoid (`lyrics_notifier.dart`):
+//! Cascade:
 //!   1) app Lyrics cache (`<sha256>.lrc`)
 //!   2) sidecar `.lrc` next to the file
 //!   3) online (prefer synced LRC)
 //!   4) write-back to cache
 //!
-//! IMPORTANT — we do **NOT** call Harmonoid’s private
-//! `/functions/v1/lyrics-get` (CI secrets `API_BASE_URL` / `API_KEY`).
-//! That endpoint would break whenever their key/host changes and is not ours to use.
-//! Online synced lyrics come from public LRCLib (+ Musixmatch / optional Spotify / Genius).
+//! Online synced lyrics come from public LRCLib (plus Musixmatch / optional Spotify / Genius).
+//! We do not depend on any third-party private lyrics endpoint.
 
 use std::time::Duration;
 
@@ -180,10 +178,7 @@ fn pick_lrclib_search(results: &[Value], duration_ms: u64) -> Option<&Value> {
         }
     }
 
-    best_synced
-        .map(|(r, _)| r)
-        .or(first_synced)
-        .or(first_any)
+    best_synced.map(|(r, _)| r).or(first_synced).or(first_any)
 }
 
 fn parse_lrclib_row(r: &Value) -> Option<LyricsResult> {
@@ -279,11 +274,7 @@ async fn fetch_lrclib(
     } else {
         None
     };
-    let album_opt = if skip_album(album) {
-        None
-    } else {
-        Some(album)
-    };
+    let album_opt = if skip_album(album) { None } else { Some(album) };
 
     let mut plain_hit: Option<LyricsResult> = None;
 
@@ -351,10 +342,13 @@ async fn fetch_online(
         let raw = id.trim_start_matches("sp-").to_string();
         if !raw.is_empty() {
             let spotify_fut = spotify_lyrics::get_spotify_lyrics(raw);
-            if let Ok(Ok(sp)) =
-                tokio::time::timeout(Duration::from_millis(800), spotify_fut).await
+            if let Ok(Ok(sp)) = tokio::time::timeout(Duration::from_millis(800), spotify_fut).await
             {
-                if sp.synced_lyrics.as_ref().is_some_and(|s| lyrics_cache::looks_synced(s)) {
+                if sp
+                    .synced_lyrics
+                    .as_ref()
+                    .is_some_and(|s| lyrics_cache::looks_synced(s))
+                {
                     return Some(LyricsResult {
                         synced_lyrics: sp.synced_lyrics,
                         plain_lyrics: sp.plain_lyrics,
@@ -367,10 +361,13 @@ async fn fetch_online(
 
     // Race public sources — each timed so one hang can't break lyrics
     let lrc_fut = async {
-        tokio::time::timeout(Duration::from_secs(10), fetch_lrclib(&clean_t, &clean_a, album, duration_ms))
-            .await
-            .ok()
-            .flatten()
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            fetch_lrclib(&clean_t, &clean_a, album, duration_ms),
+        )
+        .await
+        .ok()
+        .flatten()
     };
     let mxm_fut = async {
         tokio::time::timeout(
@@ -444,21 +441,15 @@ pub async fn get_lyrics(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    // 1. Disk cache (works offline; never depends on Harmonoid servers)
+    // 1. Disk cache (works offline)
     if let Some(ref k) = key {
         if let Some(text) = lyrics_cache::read_cached(&app, k) {
             if lyrics_cache::looks_synced(&text) {
                 return Ok(from_text(&text, "cache"));
             }
             let plain_cache = text;
-            if let Some(online) = fetch_online(
-                &title,
-                &artist,
-                &album,
-                duration_ms,
-                spotify_id.as_deref(),
-            )
-            .await
+            if let Some(online) =
+                fetch_online(&title, &artist, &album, duration_ms, spotify_id.as_deref()).await
             {
                 persist_result(&app, key.as_deref(), filepath.as_deref(), &online);
                 return Ok(online);
@@ -486,14 +477,8 @@ pub async fn get_lyrics(
                     persist_result(&app, key.as_deref(), Some(fp), &result);
                     return Ok(result);
                 }
-                if let Some(online) = fetch_online(
-                    &title,
-                    &artist,
-                    &album,
-                    duration_ms,
-                    spotify_id.as_deref(),
-                )
-                .await
+                if let Some(online) =
+                    fetch_online(&title, &artist, &album, duration_ms, spotify_id.as_deref()).await
                 {
                     if online.synced_lyrics.is_some() {
                         persist_result(&app, key.as_deref(), Some(fp), &online);
