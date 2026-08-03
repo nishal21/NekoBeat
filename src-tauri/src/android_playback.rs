@@ -7,10 +7,10 @@
 use jni::objects::{JObject, JString, JValue};
 use jni::sys::jboolean;
 use jni::JavaVM;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AndroidPermissionEntry {
     permission: String,
@@ -19,7 +19,7 @@ pub struct AndroidPermissionEntry {
     granted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AndroidPermissionStatus {
     api_level: u32,

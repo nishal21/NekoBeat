@@ -80,7 +80,7 @@ pub fn materialize_content_uri(uri: &str, dest_dir: &Path) -> Result<PathBuf, St
         .map_err(|e| format!("uri obj: {}", e))?;
 
     // Best-effort MIME for extension
-    let mime = env
+    let mime: String = env
         .call_method(
             &resolver,
             "getType",
@@ -92,7 +92,7 @@ pub fn materialize_content_uri(uri: &str, dest_dir: &Path) -> Result<PathBuf, St
         .map(|s| {
             let js = JString::from(s);
             env.get_string(&js)
-                .map(|g| g.into())
+                .map(|g| g.to_string())
                 .unwrap_or_default()
         })
         .unwrap_or_default();
