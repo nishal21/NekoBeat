@@ -130,7 +130,7 @@ pub fn materialize_content_uri(uri: &str, dest_dir: &Path) -> Result<PathBuf, St
                     &stream,
                     "read",
                     "([B)I",
-                    &[JValue::Object(&JObject::from(jbuf))],
+                    &[JValue::from(&jbuf)],
                 )
                 .map_err(|e| format!("InputStream.read: {}", e))?
                 .i()
