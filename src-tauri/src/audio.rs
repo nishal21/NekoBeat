@@ -272,6 +272,7 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         // so changing normalization never destroys the user's volume preference.
         let mut current_volume: f64 = 1.0;
         let mut current_replay_gain: f64 = 1.0;
+        #[cfg_attr(target_os = "android", allow(unused_mut))]
         let mut current_rate: f64 = 1.0;
         let mut current_eq: [f64; 10] = [0.0; 10];
         let mut current_uri = String::new();

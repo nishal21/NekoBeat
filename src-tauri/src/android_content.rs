@@ -91,9 +91,7 @@ pub fn materialize_content_uri(uri: &str, dest_dir: &Path) -> Result<PathBuf, St
         .and_then(|v| v.l().ok())
         .map(|s| {
             let js = JString::from(s);
-            env.get_string(&js)
-                .map(|g| g.to_string())
-                .unwrap_or_default()
+            env.get_string(&js).map(String::from).unwrap_or_default()
         })
         .unwrap_or_default();
 
