@@ -183,7 +183,7 @@ NekoBeat borrows ideas and patterns from these projects:
 - [Harmonoid](https://github.com/harmonoid/harmonoid) — Inspiration for Flutter music player; UI and local library ideas
 - [Muffon](https://github.com/staniel359/muffon) — multi-source streaming client; aggregation shape
 - [Muffon API](https://github.com/staniel359/muffon-api) — backend patterns for multi-source search
-- [SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC) — Spotify → lossless download chain used in NekoBeat's Spotify path
+- [SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC) — optional desktop Spotify → lossless helper; Android uses NekoBeat's standard streaming resolver without a Go runtime
 - [Spotify Lyrics API](https://github.com/akashrchandran/spotify-lyrics-api) — synced lyrics from Spotify
 - [MusicXMatch API](https://github.com/Fabrice-Music/musicxmatch-api) — Musixmatch wrapper referenced for lyrics work
 
