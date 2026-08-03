@@ -80,9 +80,6 @@ pub fn run() {
             let audio_state = audio::init_audio_thread(app.handle().clone());
             app.manage(audio_state);
 
-            // Do NOT init SpotiFLAC Go in the main process — libgojni lives in
-            // :spotiflac (SpotiFlacService). HiFi starts on first Spotify play.
-
             #[cfg(not(mobile))]
             setup_desktop(app)?;
 

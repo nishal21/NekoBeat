@@ -30,7 +30,7 @@ class MainActivity : TauriActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     try {
-      // Tell Rust where jniLibs were extracted (libspotiflac_cli.so, libytdlp.so, …)
+      // Tell Rust where executable media helpers from jniLibs were extracted.
       val bin = File(filesDir, "bin")
       if (!bin.exists()) bin.mkdirs()
       File(bin, ".native_lib_dir").writeText(applicationInfo.nativeLibraryDir)

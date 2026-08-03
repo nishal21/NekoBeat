@@ -28,10 +28,6 @@ dist-ssr
 cookies.txt
 .cursor/
 
-# SpotiFLAC-Mobile gomobile AAR (built in CI via scripts/build-gobackend-aar.sh)
-src-tauri/gen/android/app/libs/gobackend.aar
-src-tauri/gen/android/app/libs/gobackend-sources.jar
-
 # graphify
 graphify-out/
 src-tauri/src/graphify-out/
@@ -51,7 +47,6 @@ src-tauri/android-gst/jni/gst-android-build/
 # Android SpotiFLAC / ffmpeg / yt-dlp staging (fetched in CI)
 src-tauri/android-sidecars/
 vendor/SpotiFLAC/
-src-tauri/gen/android/app/src/main/jniLibs/**/libspotiflac_cli.so
 src-tauri/gen/android/app/src/main/jniLibs/**/libffmpeg.so
 src-tauri/gen/android/app/src/main/jniLibs/**/libffprobe.so
 src-tauri/gen/android/app/src/main/jniLibs/**/libytdlp.so

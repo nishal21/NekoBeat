@@ -469,24 +469,6 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          # Match vendor/SpotiFLAC-Mobile-go/go_backend/go.mod (gomobile bind)
-          go-version: '1.26.5'
-
-      - name: Build SpotiFLAC-Mobile gobackend.aar (gomobile)
-        # AAR is built here; packaging into APK uses NEKOBEAT_ENABLE_GOBACKEND on the Gradle step.
-        run: |
-          set -euo pipefail
-          chmod +x scripts/build-gobackend-aar.sh
-          bash scripts/build-gobackend-aar.sh
-          test -f src-tauri/gen/android/app/libs/gobackend.aar
-          echo "Built gobackend.aar"
-
-      - name: Build SpotiFLAC Android sidecars
-        run: bash scripts/build-spotiflac-android.sh
-
       - name: Fetch Android ffmpeg + yt-dlp
         run: bash scripts/fetch-android-native-tools.sh
 
@@ -516,10 +498,6 @@ jobs:
           GSTREAMER_ROOT_ANDROID: ${{ env.GSTREAMER_ROOT_ANDROID }}
           PKG_CONFIG_SYSROOT_DIR: ''
           PKG_CONFIG_PATH: ''
-          # Keep AAR build above for artifacts, but do NOT package into APK yet —
-          # packaging + Settings/worker bind caused UI crashes. Re-enable with '1'
-          # after device smoke of :spotiflac isolation is green.
-          NEKOBEAT_ENABLE_GOBACKEND: '0'
         run: npm run tauri:android:build
 
       - name: Verify APK is signed (not *-unsigned)

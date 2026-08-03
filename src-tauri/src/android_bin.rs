@@ -106,11 +106,9 @@ pub fn ensure_android_sidecars(app: &tauri::AppHandle) {
     }
 
     // Prefer a native dir that actually contains our helpers
-    let native = native_dirs.into_iter().find(|d| {
-        d.join("libspotiflac_cli.so").is_file()
-            || d.join("libytdlp.so").is_file()
-            || d.join("libffmpeg.so").is_file()
-    });
+    let native = native_dirs
+        .into_iter()
+        .find(|d| d.join("libytdlp.so").is_file() || d.join("libffmpeg.so").is_file());
 
     if let Some(ref native) = native {
         println!("Android sidecars: using nativeLibraryDir {:?}", native);
@@ -222,11 +220,6 @@ fn find_spotiflac_cli_desktop() -> Result<PathBuf, String> {
             candidates.push(manifest.join("binaries").join("spotiflac-cli-aarch64-apple-darwin"));
             candidates.push(manifest.join("binaries").join("spotiflac-cli-x86_64-apple-darwin"));
         }
-        #[cfg(target_os = "android")]
-        {
-            candidates.push(manifest.join("binaries").join("spotiflac-cli-aarch64-linux-android"));
-        }
-
         if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {
             return Ok(found);
         }

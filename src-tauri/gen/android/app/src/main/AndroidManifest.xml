@@ -41,12 +41,6 @@
             android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- SpotiFLAC Go AAR lives only in this process — crash isolation from UI/GST -->
-        <service
-            android:name=".SpotiFlacService"
-            android:exported="false"
-            android:process=":spotiflac" />
-
         <service
             android:name=".PlaybackService"
             android:exported="false"

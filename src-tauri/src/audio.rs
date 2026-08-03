@@ -129,6 +129,74 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
     let play_generation = Arc::new(AtomicU64::new(0));
 
     thread::spawn(move || {
+        // Keep Android startup lightweight and resilient: constructing playbin/OpenSLES can load
+        // a large native plugin graph. Cache harmless configuration/query commands and only build
+        // the pipeline after the user explicitly asks to play something.
+        let mut current_volume: f64 = 1.0;
+        let mut current_replay_gain: f64 = 1.0;
+        #[cfg_attr(target_os = "android", allow(unused_mut))]
+        let mut current_rate: f64 = 1.0;
+        let mut current_eq: [f64; 10] = [0.0; 10];
+        let mut cached_pos = std::time::Duration::ZERO;
+        let cached_dur = std::time::Duration::ZERO;
+
+        let first_play_command = loop {
+            let Ok(command) = rx.recv() else {
+                return;
+            };
+            match command {
+                command @ (AudioCommand::Play(_) | AudioCommand::PlayUrl(_)) => break command,
+                AudioCommand::SetVolume(volume) => {
+                    current_volume = volume.clamp(0.0, 1.0);
+                }
+                AudioCommand::SetEqBand(band, gain) => {
+                    if (band as usize) < current_eq.len() {
+                        current_eq[band as usize] = gain.clamp(-24.0, 12.0);
+                    }
+                }
+                AudioCommand::SetReplayGain {
+                    mode,
+                    preamp_db,
+                    tags,
+                } => {
+                    current_replay_gain = replay_gain_multiplier(mode, preamp_db, tags);
+                }
+                AudioCommand::SetPlaybackRate(rate, reply_tx) => {
+                    #[cfg(target_os = "android")]
+                    {
+                        let _ = rate;
+                        let _ = reply_tx.send(Err(
+                            "Playback-rate control is disabled on Android for pipeline stability"
+                                .into(),
+                        ));
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let result = clamp_playback_rate(rate);
+                        if let Ok(rate) = &result {
+                            current_rate = *rate;
+                        }
+                        let _ = reply_tx.send(result);
+                    }
+                }
+                AudioCommand::Seek(position) => {
+                    cached_pos = position;
+                }
+                AudioCommand::GetPosition(reply_tx) => {
+                    let _ = reply_tx.send(cached_pos);
+                }
+                AudioCommand::GetDuration(reply_tx) => {
+                    let _ = reply_tx.send(cached_dur);
+                }
+                AudioCommand::GetClock(reply_tx) => {
+                    let _ = reply_tx.send((cached_pos, cached_dur));
+                }
+                AudioCommand::Pause | AudioCommand::Resume => {
+                    // There is no pipeline or loaded URI to pause/resume yet.
+                }
+            }
+        };
+
         let exe_path = std::env::current_exe().unwrap_or_default();
         let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
         let log_path = exe_dir.join("nekobeat_startup.log");
@@ -270,14 +338,8 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
         
         // User volume and ReplayGain stay separate. The pipeline receives their product,
         // so changing normalization never destroys the user's volume preference.
-        let mut current_volume: f64 = 1.0;
-        let mut current_replay_gain: f64 = 1.0;
-        #[cfg_attr(target_os = "android", allow(unused_mut))]
-        let mut current_rate: f64 = 1.0;
-        let mut current_eq: [f64; 10] = [0.0; 10];
         let mut current_uri = String::new();
         // Cached clock — refreshed every loop so UI never depends on a raced IPC query
-        let mut cached_pos = std::time::Duration::ZERO;
         let mut cached_dur = std::time::Duration::ZERO;
         // Ignore Pause commands briefly after Resume (SMTC/shortcut double-fire)
         let mut resume_guard_until = std::time::Instant::now();
@@ -314,6 +376,7 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
             true
         };
 
+        let mut pending_command = Some(first_play_command);
         loop {
             // Keep a fresh clock sample even when no UI poll is waiting
             if let Some(pos) = playbin.query_position::<gstreamer::ClockTime>() {
@@ -325,8 +388,11 @@ pub fn init_audio_thread(app_handle: AppHandle) -> AudioState {
                 }
             }
 
-            // Check for commands with a short timeout to keep the loop responsive
-            if let Ok(cmd) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            // Process the Play command that triggered lazy initialization, then poll normally.
+            let command = pending_command
+                .take()
+                .or_else(|| rx.recv_timeout(std::time::Duration::from_millis(50)).ok());
+            if let Some(cmd) = command {
                 match cmd {
                     AudioCommand::Play(path) => {
                         let resolved = match crate::path_util::resolve_playable_local_path(&path) {
