@@ -39,6 +39,7 @@ jobs:
           - platform: windows-latest
             args: >-
               --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.windows.conf.json
               --config src-tauri/tauri.ci.conf.json
             rust_targets: ''
             artifact: nekobeat-windows

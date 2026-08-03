@@ -175,7 +175,9 @@ jobs:
               --config src-tauri/tauri.linux.conf.json
             rust_targets: ''
           - platform: windows-latest
-            args: --config src-tauri/tauri.desktop.conf.json
+            args: >-
+              --config src-tauri/tauri.desktop.conf.json
+              --config src-tauri/tauri.windows.conf.json
             rust_targets: ''
 
     runs-on: ${{ matrix.platform }}

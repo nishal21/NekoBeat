@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.desktop.conf.json",
-    "tauri:build": "tauri build --config src-tauri/tauri.desktop.conf.json",
+    "tauri:build": "tauri build --config src-tauri/tauri.desktop.conf.json --config src-tauri/tauri.windows.conf.json",
     "tauri:build:linux": "tauri build --config src-tauri/tauri.desktop.conf.json --config src-tauri/tauri.linux.conf.json",
     "tauri:build:macos": "tauri build --config src-tauri/tauri.desktop.conf.json --config src-tauri/tauri.macos.conf.json",
     "tauri:android:dev": "tauri android dev",

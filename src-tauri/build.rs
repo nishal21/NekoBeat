@@ -2,9 +2,8 @@ fn main() {
     // build.rs runs on the host; use CARGO_CFG_TARGET_OS for cross-compile targets.
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
-    if target_os == "android" {
-        android_gstreamer_hints();
-    } else if target_os == "windows" {
+    // Android playback is Media3 — do not link or require libgstreamer_android.so.
+    if target_os == "windows" {
         windows_gstreamer_delay_load();
     }
 
@@ -51,74 +50,4 @@ fn windows_gstreamer_delay_load() {
 
     println!("cargo:rustc-link-search=native=C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64\\lib");
     println!("cargo:rustc-link-search=native=C:\\gstreamer\\1.0\\msvc_x86_64\\lib");
-}
-
-// Android: pkg-config from GStreamer universal SDK + link mono-lib at runtime.
-// See docs/ANDROID_GSTREAMER.md
-fn android_gstreamer_hints() {
-    let root = std::env::var("GSTREAMER_ROOT_ANDROID").unwrap_or_else(|_| {
-        // Prefer repo-local vendor/ (CI), then monorepo sibling ../vendor (dev).
-        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-        let local = std::path::Path::new(&manifest).join("../vendor");
-        let mono = std::path::Path::new(&manifest).join("../../vendor");
-        if local.join("arm64").exists() {
-            local.to_string_lossy().into_owned()
-        } else if mono.join("arm64").exists() {
-            mono.to_string_lossy().into_owned()
-        } else {
-            "../vendor".into()
-        }
-    });
-    let abi = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".into());
-    let gst_arch = match abi.as_str() {
-        "aarch64" => "arm64",
-        "arm" => "armv7",
-        "x86_64" => "x86_64",
-        "x86" => "x86",
-        _ => "arm64",
-    };
-    let arch_root = format!("{}/{}", root.replace('\\', "/"), gst_arch);
-    let lib_dir = format!("{}/lib", arch_root);
-    let pkgconfig = format!("{}/lib/pkgconfig", arch_root);
-    let ndk_abi = match abi.as_str() {
-        "aarch64" => "arm64-v8a",
-        "arm" => "armeabi-v7a",
-        "x86_64" => "x86_64",
-        "x86" => "x86",
-        _ => "arm64-v8a",
-    };
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let gst_android_build = format!(
-        "{}/android-gst/jni/gst-android-build/{}",
-        manifest_dir.replace('\\', "/"),
-        ndk_abi
-    );
-    let gst_android_libs = format!(
-        "{}/android-gst/libs/{}",
-        manifest_dir.replace('\\', "/"),
-        ndk_abi
-    );
-    // Link-only copy from CI prebuild (not packaged by AGP — avoids Duplicate resources)
-    let gst_android_link = format!(
-        "{}/android-gst/link/{}",
-        manifest_dir.replace('\\', "/"),
-        ndk_abi
-    );
-    let jni_libs = format!(
-        "{}/gen/android/app/src/main/jniLibs/{}",
-        manifest_dir.replace('\\', "/"),
-        ndk_abi
-    );
-
-    println!("cargo:rerun-if-env-changed=GSTREAMER_ROOT_ANDROID");
-    println!("cargo:rustc-link-search=native={}", lib_dir);
-    println!("cargo:rustc-link-search=native={}", gst_android_link);
-    println!("cargo:rustc-link-search=native={}", jni_libs);
-    println!("cargo:rustc-link-search=native={}", gst_android_libs);
-    println!("cargo:rustc-link-search=native={}", gst_android_build);
-    println!("cargo:rustc-link-lib=dylib=gstreamer_android");
-
-    std::env::set_var("PKG_CONFIG_ALLOW_CROSS", "1");
-    std::env::set_var("PKG_CONFIG_SYSROOT_DIR", &arch_root);
-    std::env::set_var("PKG_CONFIG_PATH", &pkgconfig);
 }
