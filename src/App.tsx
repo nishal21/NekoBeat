@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
-import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, FolderOpen, FolderSearch, Music, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack, Search, Home, Library, Settings, ChevronDown, Maximize2, Minimize2, ListMusic, Heart, LayoutGrid, List, Volume2, VolumeX, MonitorPlay, GripVertical, Repeat, ArrowUp, ArrowDown, Shuffle, Trash2, Gauge } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, EQ_PRESETS, useAudioClock, getAudioClock, seedAudioClockDuration, isResumeGuarded, isRealArtworkUrl, toDisplayArtUrl, usePlayQueue, QueueTrack } from "./hooks";
+import { useAudioPlayer, useLibrary, fetchAlbumArt, fetchLyrics, LyricsData, useAggregatorSearch, AggregatedTrack, useLikedLibrary, useEqualizer, usePortablePlaybackControls, PlaybackCapabilities, EQ_PRESETS, useAudioClock, getAudioClock, seedAudioClockDuration, isResumeGuarded, isRealArtworkUrl, toDisplayArtUrl, usePlayQueue, usePlaylists, QueueTrack, TrackData } from "./hooks";
 // Used for interacting with system dialogs in Tauri
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -10,8 +10,28 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
 import logoImg from "./assets/logo.png";
 import { UpdateNotification, UpdateSettingsCard } from "./UpdateToast";
-import { AndroidScopeBanner, AndroidScopeSettingsCard } from "./AndroidScopeNote";
 import type { AvailableUpdate } from "./updates";
+import {
+  loadShowAudioFormat, saveShowAudioFormat,
+  loadNotificationLyrics, saveNotificationLyrics,
+  loadCoverFallback, saveCoverFallback,
+  loadLrcFromDirectory, saveLrcFromDirectory,
+  loadExpandOnPlay, saveExpandOnPlay,
+  loadLyricsAlign, saveLyricsAlign,
+  loadLibrarySubTab, saveLibrarySubTab,
+  loadLibrarySort, saveLibrarySort,
+  loadRefreshAtStartup, saveRefreshAtStartup,
+  loadPlaylistQueueMode, savePlaylistQueueMode,
+  loadPlaybackRestore, savePlaybackRestore,
+  loadWindowsTaskbarProgress, saveWindowsTaskbarProgress,
+  loadLyricsSize, saveLyricsSize,
+  loadAnimationIntensity, saveAnimationIntensity,
+  loadAndroidOnlineOptIn, saveAndroidOnlineOptIn,
+  type LibrarySubTab, type LibrarySort, type LyricsAlign,
+  type PlaylistQueueMode, type LyricsSize, type AnimationIntensity,
+} from "./prefs";
+import { findArtistTracks, findAlbumTracks } from "./libraryGroup";
+import { LibraryPanel } from "./LibraryPanel";
 
 type RecentPlay = {
   id: string;
@@ -21,6 +41,57 @@ type RecentPlay = {
   source?: string;
   stream_url?: string;
   filepath?: string;
+};
+
+type PersistedPlaybackState = {
+  version: number;
+  queue: QueueTrack[];
+  currentIndex: number;
+  loopEnabled: boolean;
+  shuffleEnabled: boolean;
+  currentTrack: QueueTrack | null;
+  positionMs: number;
+};
+
+type AndroidPermissionEntry = {
+  permission: string;
+  label: string;
+  applicable: boolean;
+  granted: boolean;
+};
+
+type AndroidPermissionStatus = {
+  apiLevel: number;
+  audio: AndroidPermissionEntry;
+  notifications: AndroidPermissionEntry;
+};
+
+type AndroidCapabilityCheck = {
+  available: boolean;
+  required: boolean;
+  detail: string;
+};
+
+type AndroidStreamingCapabilities = {
+  ready: boolean;
+  platform: AndroidCapabilityCheck;
+  gstreamer: AndroidCapabilityCheck;
+  playbin: AndroidCapabilityCheck;
+  networkSource: AndroidCapabilityCheck;
+  resolverBridge: AndroidCapabilityCheck;
+  foregroundMediaSession: AndroidCapabilityCheck;
+};
+
+type AndroidStreamingDiagnosticCheck = {
+  available: boolean;
+  detail: string;
+};
+
+type AndroidStreamingDiagnostics = {
+  youtube: AndroidStreamingDiagnosticCheck;
+  soundcloud: AndroidStreamingDiagnosticCheck;
+  spotifyMatch: AndroidStreamingDiagnosticCheck;
+  note: string;
 };
 
 function resolveTrackSource(id?: string, source?: string): string | undefined {
@@ -88,8 +159,64 @@ const formatTime = (ms: number) => {
 };
 
 const stripExtension = (title: string) => {
-  return title.replace(/\.(mp3|flac|wav|m4a|ogg)$/i, '');
+  return title.replace(/\.(mp3|flac|wav|m4a|mp4|ogg|opus|aac|wma|aiff|aif|wv|ape|alac|webm|dsf|dff)$/i, '');
 };
+
+/** Harmonoid-style tech line: FLAC • 1012 kbps • 44.1 kHz • Stereo */
+function audioFormatLabel(t: {
+  format?: string | null;
+  bitrate_kbps?: number | null;
+  sample_rate_hz?: number | null;
+  channels?: number | null;
+  filepath?: string;
+}): string {
+  const parts: string[] = [];
+  const fmt =
+    (t.format && t.format.trim()) ||
+    (t.filepath ? t.filepath.split('.').pop()?.toUpperCase() : '') ||
+    '';
+  if (fmt) parts.push(fmt);
+  if (t.bitrate_kbps && t.bitrate_kbps > 0) parts.push(`${t.bitrate_kbps} kbps`);
+  if (t.sample_rate_hz && t.sample_rate_hz > 0) {
+    parts.push(`${(t.sample_rate_hz / 1000).toFixed(t.sample_rate_hz % 1000 === 0 ? 0 : 1)} kHz`);
+  }
+  if (t.channels === 1) parts.push('Mono');
+  else if (t.channels === 2) parts.push('Stereo');
+  else if (t.channels && t.channels > 2) parts.push(`${t.channels}ch`);
+  return parts.join(' • ');
+}
+
+function tracksToQueue(tracks: TrackData[]): QueueTrack[] {
+  return tracks.map((t) => ({
+    id: t.filepath,
+    title: t.title,
+    artist: t.artist,
+    album: t.album || 'Local',
+    duration_ms: t.duration_ms || 0,
+    artwork_url: t.artwork_url || '',
+    source: t.source || 'local',
+    stream_url: t.filepath,
+    playbackContext: 'queue' as const,
+    local_lyrics: t.local_lyrics,
+    format: t.format,
+    bitrate_kbps: t.bitrate_kbps,
+    sample_rate_hz: t.sample_rate_hz,
+    channels: t.channels,
+    genre: t.genre,
+    track_number: t.track_number,
+    disc_number: t.disc_number,
+    year: t.year,
+    date_added: t.date_added,
+  }));
+}
+
+function isLocalQueueTrack(t: { source?: string; stream_url?: string; id?: string }): boolean {
+  const src = (t.source || '').toLowerCase();
+  if (src === 'local') return true;
+  const path = t.stream_url || t.id || '';
+  if (!path || /^https?:\/\//i.test(path) || path.startsWith('yt-') || path.startsWith('sc-') || path.startsWith('sp-')) return false;
+  return /[\\/]/.test(path) || path.startsWith('file:') || path.startsWith('content:');
+}
 
 /** Seek from click/pointer position on a track element. */
 function seekPercentFromClientX(el: HTMLElement, clientX: number): number {
@@ -496,8 +623,29 @@ const VolumeControl = memo(({ volume, onChange, alwaysShow = false }: { volume: 
   );
 });
 
-const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyricsOffsetMs, onOffsetChange, onUploadLyrics }: { parsedLyrics: { timeMs: number, text: string }[], hasPlainLyrics: boolean, plainLyricsText?: string, lyricsOffsetMs: number, onOffsetChange: (offset: number) => void, onUploadLyrics?: () => void }) => {
+const SettingsToggle = memo(({ title, desc, value, onChange }: { title: string; desc: string; value: boolean; onChange: (v: boolean) => void }) => (
+  <button
+    type="button"
+    onClick={() => onChange(!value)}
+    className={`flex items-center justify-between gap-3 p-4 min-h-[64px] rounded-2xl transition-all border text-left w-full ${
+      value
+        ? 'bg-white/10 border-[var(--color-neon-yellow)] shadow-[0_0_15px_-5px_rgba(219,255,0,0.3)]'
+        : 'bg-black/20 border-white/5 hover:bg-white/5'
+    }`}
+  >
+    <div className="min-w-0">
+      <span className="font-bold text-white block">{title}</span>
+      <span className="text-xs text-[var(--color-ink-muted)]">{desc}</span>
+    </div>
+    <div className={`w-12 h-6 rounded-full transition-colors relative shrink-0 ${value ? 'bg-[var(--color-neon-yellow)]' : 'bg-neutral-800'}`}>
+      <div className={`absolute top-1 w-4 h-4 rounded-full transition-all ${value ? 'left-7 bg-black' : 'left-1 bg-neutral-400'}`} />
+    </div>
+  </button>
+));
+
+const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyricsOffsetMs, onOffsetChange, onUploadLyrics, onActiveLineChange, align = 'left', size = 'medium', lyricsSource }: { parsedLyrics: { timeMs: number, text: string }[], hasPlainLyrics: boolean, plainLyricsText?: string, lyricsOffsetMs: number, onOffsetChange: (offset: number) => void, onUploadLyrics?: () => void, onActiveLineChange?: (line: string, index: number, context: string) => void, align?: LyricsAlign, size?: LyricsSize, lyricsSource?: string }) => {
   const { positionMs } = useAudioClock();
+  const lastNotifiedLyricRef = useRef(-1);
   let activeLyricIndex = -1;
   const adjustedPositionMs = positionMs - lyricsOffsetMs;
   for (let i = 0; i < parsedLyrics.length; i++) {
@@ -508,6 +656,10 @@ const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyr
     }
   }
 
+  useEffect(() => {
+    lastNotifiedLyricRef.current = -1;
+  }, [parsedLyrics]);
+
   // Smoothly scroll the active lyric into the center of the mask
   useEffect(() => {
     if (activeLyricIndex >= 0 && parsedLyrics.length > 0) {
@@ -515,8 +667,21 @@ const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyr
       if (activeLine) {
         activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
+      if (activeLyricIndex !== lastNotifiedLyricRef.current) {
+        lastNotifiedLyricRef.current = activeLyricIndex;
+        const from = Math.max(0, activeLyricIndex - 2);
+        const to = Math.min(parsedLyrics.length, activeLyricIndex + 3);
+        const context = parsedLyrics
+          .slice(from, to)
+          .map((item, offset) => {
+            const index = from + offset;
+            return index === activeLyricIndex ? `▶ ${item.text}` : item.text;
+          })
+          .join('\n');
+        onActiveLineChange?.(parsedLyrics[activeLyricIndex].text, activeLyricIndex, context);
+      }
     }
-  }, [activeLyricIndex, parsedLyrics.length]);
+  }, [activeLyricIndex, parsedLyrics, onActiveLineChange]);
 
   return (
     <div
@@ -529,6 +694,14 @@ const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyr
     >
       {/* Control Bar */}
       <div className="fixed top-8 right-8 z-50 flex items-center gap-2 transition-opacity group-hover/lyrics:opacity-100 opacity-20 hover:opacity-100">
+        {lyricsSource && (
+          <span
+            className="hidden sm:inline-flex bg-black/40 backdrop-blur-xl rounded-full px-3 py-2 border border-white/10 text-[10px] font-black uppercase tracking-widest text-[var(--color-neon-yellow)]"
+            title={`Lyrics source: ${lyricsSource}`}
+          >
+            {lyricsSource === 'cache' ? 'Offline lyrics' : lyricsSource}
+          </span>
+        )}
         {onUploadLyrics && (
            <button 
              onClick={onUploadLyrics}
@@ -549,18 +722,19 @@ const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyr
       </div>
 
       {parsedLyrics.length > 0 ? (
-        <div className="flex flex-col gap-6 md:gap-10">
+        <div className={`flex flex-col gap-6 md:gap-10 ${align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : 'text-left'}`}>
           {parsedLyrics.map((line, ix) => {
             const isActive = ix === activeLyricIndex;
+            const origin = align === 'center' ? 'origin-center' : align === 'right' ? 'origin-right' : 'origin-left';
 
             return (
               <div
                 key={ix}
                 id={`lyric-${ix}`}
-                className={`px-2 py-1 transition-all duration-500 ease-out origin-left will-change-[transform,opacity]
+                className={`px-2 py-1 transition-all duration-500 ease-out ${origin} will-change-[transform,opacity]
                   ${isActive ? 'scale-105 opacity-100' : 'scale-100 opacity-20'}`}
               >
-                <p className={`text-2xl md:text-5xl font-lyrics font-black tracking-tight leading-tight transition-colors duration-500
+                <p className={`${size === 'small' ? 'text-xl md:text-4xl' : size === 'large' ? 'text-3xl md:text-6xl' : 'text-2xl md:text-5xl'} font-lyrics font-black tracking-tight leading-tight transition-colors duration-500
                   ${isActive ? 'liquid-neon-text' : 'text-white'}`}>
                   {line.text}
                 </p>
@@ -569,11 +743,11 @@ const LyricsDisplay = memo(({ parsedLyrics, hasPlainLyrics, plainLyricsText, lyr
           })}
         </div>
       ) : hasPlainLyrics && plainLyricsText ? (
-        <div className="flex flex-col gap-4 py-8">
+        <div className={`flex flex-col gap-4 py-8 ${align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : 'text-left'}`}>
           <p className="text-sm font-bold text-[var(--color-neon-yellow)] tracking-widest uppercase mb-4 opacity-80">Unsynchronized Lyrics</p>
           {plainLyricsText.split('\n').map((line, ix) => (
             <div key={ix} className="px-2 py-1">
-              <p className={`text-2xl md:text-4xl font-lyrics font-bold tracking-tight leading-tight text-white/80`}>
+              <p className={`${size === 'small' ? 'text-xl md:text-3xl' : size === 'large' ? 'text-3xl md:text-5xl' : 'text-2xl md:text-4xl'} font-lyrics font-bold tracking-tight leading-tight text-white/80`}>
                 {line || "\u00A0"}
               </p>
             </div>
@@ -787,6 +961,131 @@ const Equalizer = memo(() => {
   );
 });
 
+type PortablePlaybackControlsProps = {
+  capabilities: PlaybackCapabilities;
+  playbackRate: number;
+  replayGainMode: 'off' | 'track' | 'album';
+  replayGainPreamp: number;
+  onPlaybackRateChange: (value: number) => Promise<void>;
+  onReplayGainModeChange: (value: 'off' | 'track' | 'album') => void;
+  onReplayGainPreampChange: (value: number) => void;
+};
+
+const PortablePlaybackControls = memo(({
+  capabilities,
+  playbackRate,
+  replayGainMode,
+  replayGainPreamp,
+  onPlaybackRateChange,
+  onReplayGainModeChange,
+  onReplayGainPreampChange,
+}: PortablePlaybackControlsProps) => (
+  <div className="space-y-6">
+    <div>
+      <p className="section-kicker mb-1.5">Portable playback</p>
+      <h3 className="text-lg sm:text-xl font-display font-bold text-white tracking-tight flex items-center gap-2">
+        <Gauge size={20} className="text-[var(--color-neon-yellow)]" />
+        Speed & loudness
+      </h3>
+      <p className="text-sm text-[var(--color-ink-muted)] mt-1">
+        Global controls backed by the native GStreamer player.
+      </p>
+    </div>
+
+    {capabilities.playback_rate && (
+      <fieldset className="space-y-3">
+        <legend className="sr-only">Playback speed</legend>
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm font-bold text-white">Playback speed</span>
+          <output className="text-sm font-black tabular-nums text-[var(--color-neon-yellow)]">
+            {playbackRate.toFixed(2)}×
+          </output>
+        </div>
+        <input
+          type="range"
+          min={capabilities.min_playback_rate}
+          max={capabilities.max_playback_rate}
+          step={0.05}
+          value={playbackRate}
+          aria-label="Playback speed"
+          onChange={(event) => { void onPlaybackRateChange(Number(event.target.value)); }}
+          className="w-full accent-[var(--color-neon-yellow)]"
+        />
+        <div className="flex flex-wrap gap-2">
+          {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+            <button
+              key={rate}
+              type="button"
+              onClick={() => { void onPlaybackRateChange(rate); }}
+              aria-pressed={Math.abs(playbackRate - rate) < 0.001}
+              className={`px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold border transition-colors ${
+                Math.abs(playbackRate - rate) < 0.001
+                  ? 'bg-[var(--color-neon-yellow)] border-[var(--color-neon-yellow)] text-black'
+                  : 'bg-white/5 border-white/10 text-neutral-300 hover:border-white/25'
+              }`}
+            >
+              {rate}×
+            </button>
+          ))}
+        </div>
+      </fieldset>
+    )}
+
+    {capabilities.replay_gain && (
+      <fieldset className="space-y-4">
+        <legend className="sr-only">ReplayGain</legend>
+        <div>
+          <span className="text-sm font-bold text-white">ReplayGain</span>
+          <p className="text-xs text-[var(--color-ink-muted)] mt-1">
+            Uses stored tags when present. Album mode falls back to track gain; clipping protection is always applied.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-2" role="group" aria-label="ReplayGain mode">
+          {(['off', 'track', 'album'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={replayGainMode === mode}
+              onClick={() => onReplayGainModeChange(mode)}
+              className={`capitalize px-3 py-2.5 min-h-[44px] rounded-xl text-xs font-bold border transition-colors ${
+                replayGainMode === mode
+                  ? 'bg-[var(--color-neon-yellow)] border-[var(--color-neon-yellow)] text-black'
+                  : 'bg-white/5 border-white/10 text-neutral-300 hover:border-white/25'
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+        <label className="block space-y-2">
+          <span className="flex items-center justify-between gap-4 text-sm font-bold text-white">
+            Preamp
+            <output className="text-xs tabular-nums text-[var(--color-neon-yellow)]">
+              {replayGainPreamp > 0 ? '+' : ''}{replayGainPreamp.toFixed(1)} dB
+            </output>
+          </span>
+          <input
+            type="range"
+            min={-12}
+            max={12}
+            step={0.5}
+            value={replayGainPreamp}
+            disabled={replayGainMode === 'off'}
+            onChange={(event) => onReplayGainPreampChange(Number(event.target.value))}
+            className="w-full accent-[var(--color-neon-yellow)] disabled:opacity-40"
+          />
+        </label>
+        <p className="text-[11px] text-[var(--color-ink-faint)]">
+          Safe volume-domain normalization
+          {capabilities.replay_gain_filter_available
+            ? ' · rgvolume/rglimiter detected, but live graph mutation is intentionally avoided'
+            : ' · rgvolume/rglimiter unavailable'}
+        </p>
+      </fieldset>
+    )}
+  </div>
+));
+
 function App() {
   const [externalTrack, setExternalTrack] = useState<any | null>(null);
   const [isMiniplayerMode, setIsMiniplayerMode] = useState(false);
@@ -867,6 +1166,7 @@ function App() {
   const onTogglePlayRef = useRef<any>(null);
   const onNextRef = useRef<any>(null);
   const onPrevRef = useRef<any>(null);
+  const seekPlaybackRef = useRef<(positionMs: number) => void>(() => {});
 
   const [showMobileLyrics, setShowMobileLyrics] = useState(false);
   const [videoMode, setVideoMode] = useState<boolean>(() => {
@@ -874,12 +1174,23 @@ function App() {
     return saved ? JSON.parse(saved) : false;
   });
 
-  const { tracks, isScanning, scanDirectory, importAudioFiles, scanDeviceMusic, clearLibrary, patchTrack } = useLibrary();
+  const {
+    tracks, isScanning, scanDirectory, importAudioFiles, scanDeviceMusic,
+    clearLibrary, loadCachedTracks, reindexLibrary, patchTrack,
+    settings: librarySettings, setMinFileSize, removeDirectory,
+  } = useLibrary();
+  const [runtimePlatform, setRuntimePlatform] = useState('');
   const [isMobileOs, setIsMobileOs] = useState(false);
   const [isAndroidOs, setIsAndroidOs] = useState(false);
+  const usesNativeAndroidMediaSession = isAndroidOs || /Android/i.test(navigator.userAgent || '');
   const { results: searchResults, isLoading: isSearching, isLoadingMore, hasMore, search: performSearch, loadMore, sourceErrors, error: searchError } = useAggregatorSearch();
   const { likedTracks, isLiking, toggleLike } = useLikedLibrary();
   const playQueue = usePlayQueue();
+  const playlistStore = usePlaylists();
+  const [playlistTracks, setPlaylistTracks] = useState<TrackData[]>([]);
+  const [playbackStateLoaded, setPlaybackStateLoaded] = useState(false);
+  const restoredPositionRef = useRef(0);
+  const restoredTrackRef = useRef<QueueTrack | null>(null);
   const prefetchedIdsRef = useRef<Set<string>>(new Set());
   const playRequestRef = useRef(0);
   const [queueDragFrom, setQueueDragFrom] = useState<number | null>(null);
@@ -933,14 +1244,14 @@ function App() {
   isPlayingRef.current = isPlaying;
   const pausePlaybackRef = useRef(pausePlayback);
   pausePlaybackRef.current = pausePlayback;
-  const resumePlaybackRef = useRef(resumePlayback);
-  resumePlaybackRef.current = resumePlayback;
+  seekPlaybackRef.current = (positionMs: number) => { void seek(positionMs); };
 
   const [coverArt, setCoverArt] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [lyricsOffsetMs, setLyricsOffsetMs] = useState(0);
   const [lyricsData, setLyricsData] = useState<LyricsData | null>(null);
   const [parsedLyrics, setParsedLyrics] = useState<{ timeMs: number, text: string }[]>([]);
+  const [nowPlayingLyric, setNowPlayingLyric] = useState('');
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSource, setSearchSource] = useState<'all' | 'youtube' | 'soundcloud' | 'spotify' | 'bandcamp' | 'vk' | 'yandex'>('all');
   const [activeSources, setActiveSources] = useState({
@@ -961,6 +1272,34 @@ function App() {
     const saved = localStorage.getItem('nekobeat_view_mode');
     return (saved as 'grid' | 'list') || 'grid';
   });
+  const [librarySubTab, setLibrarySubTab] = useState<LibrarySubTab>(() => loadLibrarySubTab());
+  const [librarySort, setLibrarySort] = useState<LibrarySort>(() => loadLibrarySort());
+  const [libraryFocus, setLibraryFocus] = useState<
+    | null
+    | { kind: 'artist'; name: string }
+    | { kind: 'album'; name: string; artist: string }
+    | { kind: 'genre'; name: string }
+    | { kind: 'playlist'; id: number; name: string; isHistory: boolean }
+  >(null);
+  const [showAudioFormat, setShowAudioFormat] = useState(() => loadShowAudioFormat());
+  const [notificationLyrics, setNotificationLyrics] = useState(() => loadNotificationLyrics());
+  const [coverFallback, setCoverFallback] = useState(() => loadCoverFallback());
+  const [lrcFromDirectory, setLrcFromDirectory] = useState(() => loadLrcFromDirectory());
+  const [expandOnPlay, setExpandOnPlay] = useState(() => loadExpandOnPlay());
+  const [lyricsAlign, setLyricsAlign] = useState<LyricsAlign>(() => loadLyricsAlign());
+  const [refreshAtStartup, setRefreshAtStartup] = useState(() => loadRefreshAtStartup());
+  const [playlistQueueMode, setPlaylistQueueMode] = useState<PlaylistQueueMode>(() => loadPlaylistQueueMode());
+  const [playbackRestore, setPlaybackRestore] = useState(() => loadPlaybackRestore());
+  const [windowsTaskbarProgress, setWindowsTaskbarProgress] = useState(() => loadWindowsTaskbarProgress());
+  const [lyricsSize, setLyricsSize] = useState<LyricsSize>(() => loadLyricsSize());
+  const [animationIntensity, setAnimationIntensity] = useState<AnimationIntensity>(() => loadAnimationIntensity());
+  const [androidPermissions, setAndroidPermissions] = useState<AndroidPermissionStatus | null>(null);
+  const [permissionRequesting, setPermissionRequesting] = useState<string | null>(null);
+  const [androidOnlineOptIn, setAndroidOnlineOptIn] = useState(() => loadAndroidOnlineOptIn());
+  const [androidStreamingCapabilities, setAndroidStreamingCapabilities] = useState<AndroidStreamingCapabilities | null>(null);
+  const [androidCapabilitiesError, setAndroidCapabilitiesError] = useState('');
+  const [androidDiagnostics, setAndroidDiagnostics] = useState<AndroidStreamingDiagnostics | null>(null);
+  const [androidDiagnosticsRunning, setAndroidDiagnosticsRunning] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [streamError, setStreamError] = useState<{ message: string, trackTitle?: string, trackArtist?: string, source?: string, previewUrl?: string } | null>(null);
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
@@ -970,6 +1309,8 @@ function App() {
   const [updateUpToDate, setUpdateUpToDate] = useState(false);
   const [updateErr, setUpdateErr] = useState<string | undefined>();
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
+  const androidOnlineEnabled =
+    !isAndroidOs || (androidStreamingCapabilities?.ready === true && androidOnlineOptIn);
 
   useEffect(() => {
     import("@tauri-apps/api/app")
@@ -985,6 +1326,31 @@ function App() {
   useEffect(() => {
     localStorage.setItem('nekobeat_view_mode', viewMode);
   }, [viewMode]);
+  useEffect(() => { saveLibrarySubTab(librarySubTab); }, [librarySubTab]);
+  useEffect(() => { saveLibrarySort(librarySort); }, [librarySort]);
+  useEffect(() => { saveShowAudioFormat(showAudioFormat); }, [showAudioFormat]);
+  useEffect(() => { saveNotificationLyrics(notificationLyrics); }, [notificationLyrics]);
+  useEffect(() => { saveCoverFallback(coverFallback); }, [coverFallback]);
+  useEffect(() => { saveLrcFromDirectory(lrcFromDirectory); }, [lrcFromDirectory]);
+  useEffect(() => { saveExpandOnPlay(expandOnPlay); }, [expandOnPlay]);
+  useEffect(() => { saveLyricsAlign(lyricsAlign); }, [lyricsAlign]);
+  useEffect(() => { saveRefreshAtStartup(refreshAtStartup); }, [refreshAtStartup]);
+  useEffect(() => { savePlaylistQueueMode(playlistQueueMode); }, [playlistQueueMode]);
+  useEffect(() => { savePlaybackRestore(playbackRestore); }, [playbackRestore]);
+  useEffect(() => { saveWindowsTaskbarProgress(windowsTaskbarProgress); }, [windowsTaskbarProgress]);
+  useEffect(() => { saveLyricsSize(lyricsSize); }, [lyricsSize]);
+  useEffect(() => { saveAnimationIntensity(animationIntensity); }, [animationIntensity]);
+  useEffect(() => { saveAndroidOnlineOptIn(androidOnlineOptIn); }, [androidOnlineOptIn]);
+
+  useEffect(() => {
+    document.documentElement.dataset.animationIntensity = animationIntensity;
+    return () => { delete document.documentElement.dataset.animationIntensity; };
+  }, [animationIntensity]);
+
+  useEffect(() => {
+    if (!refreshAtStartup) return;
+    void reindexLibrary().catch((error) => console.warn('Startup library refresh failed:', error));
+  }, []); // startup preference is intentionally sampled once
 
   useEffect(() => {
     localStorage.setItem('nekobeat_video_mode', JSON.stringify(videoMode));
@@ -1049,10 +1415,8 @@ function App() {
   const currentTrack = tracks.find(t => t.filepath === currentTrackPath);
 
   // Prefer externalTrack for liked/search playback so library path collisions can't show the wrong title
-  let playerTrack = currentTrack;
-  if (externalTrack && currentTrackPath) {
-    playerTrack = externalTrack;
-  }
+  let playerTrack = externalTrack || currentTrack;
+  const portablePlayback = usePortablePlaybackControls(playerTrack);
 
   // Persist recent plays + push current track into Continue row
   useEffect(() => {
@@ -1209,23 +1573,38 @@ function App() {
   const parseLrc = (lrc: string) => {
     const lines = lrc.split('\n');
     const result: { timeMs: number, text: string }[] = [];
-    const timeReg = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+    // Supports [m:ss], [mm:ss.xx], [mm:ss:xxx], multiple timestamps per line,
+    // metadata tags, and [offset:+/-ms] (same practical set as mature LRC parsers).
+    const timeReg = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+    const offsetMatch = lrc.match(/\[offset:([+-]?\d+)\]/i);
+    const fileOffsetMs = offsetMatch ? Number.parseInt(offsetMatch[1], 10) || 0 : 0;
 
-    for (const line of lines) {
-      const match = timeReg.exec(line);
-      if (match) {
-        const m = parseInt(match[1]);
-        const s = parseInt(match[2]);
-        const msStr = match[3].length === 2 ? match[3] + '0' : match[3];
-        const ms = parseInt(msStr);
-        const timeMs = (m * 60 * 1000) + (s * 1000) + ms;
-        const text = line.replace(timeReg, '').trim();
-        if (text) {
-          result.push({ timeMs, text });
-        }
+    for (const rawLine of lines) {
+      const timestamps = Array.from(rawLine.matchAll(timeReg));
+      if (!timestamps.length) continue;
+      const text = rawLine.replace(timeReg, '').trim();
+      if (!text) continue;
+
+      for (const match of timestamps) {
+        const minutes = Number.parseInt(match[1], 10);
+        const seconds = Number.parseInt(match[2], 10);
+        if (!Number.isFinite(minutes) || !Number.isFinite(seconds) || seconds > 59) continue;
+        const fraction = match[3] || '';
+        const milliseconds =
+          fraction.length === 1 ? Number.parseInt(fraction, 10) * 100 :
+          fraction.length === 2 ? Number.parseInt(fraction, 10) * 10 :
+          fraction.length === 3 ? Number.parseInt(fraction, 10) : 0;
+        const timeMs = Math.max(0, minutes * 60_000 + seconds * 1000 + milliseconds + fileOffsetMs);
+        result.push({ timeMs, text });
       }
     }
-    return result;
+
+    result.sort((a, b) => a.timeMs - b.timeMs);
+    return result.filter((line, index) =>
+      index === 0 ||
+      line.timeMs !== result[index - 1].timeMs ||
+      line.text !== result[index - 1].text
+    );
   };
 
   // Helper to get playback URL for an external track
@@ -1237,6 +1616,15 @@ function App() {
             track.id
     );
   };
+
+  const toExternalQueueTrack = (
+    track: AggregatedTrack,
+    context: 'search' | 'liked',
+  ): QueueTrack => ({
+    ...track,
+    stream_url: getTrackPlaybackUrl(track),
+    playbackContext: context,
+  });
 
   /** Warm yt-dlp / SC disk cache for upcoming queue tracks while current song plays. */
   const prefetchUpNext = useCallback((count = 2) => {
@@ -1277,8 +1665,12 @@ function App() {
   const handleStreamExternalAudio = async (
     track: any,
     context: 'search' | 'liked' = 'search',
-    opts?: { skipQueueRebuild?: boolean },
+    opts?: { skipQueueRebuild?: boolean; resumePositionMs?: number },
   ) => {
+    if (!opts?.resumePositionMs) {
+      restoredTrackRef.current = null;
+      restoredPositionRef.current = 0;
+    }
     const requestId = ++playRequestRef.current;
 
     // Build / refresh play queue from current context
@@ -1379,15 +1771,18 @@ function App() {
       try {
         await playTrack(localPath, track.id);
         if (requestId !== playRequestRef.current) return;
+        if (opts?.resumePositionMs && opts.resumePositionMs > 0) {
+          await seek(opts.resumePositionMs);
+        }
         setStreamError(null);
         return;
       } catch (e) {
         console.error("Failed to play local liked track, falling back to stream:", e);
         if (requestId !== playRequestRef.current) return;
-        if (isAndroidOs) {
+        if (isAndroidOs && !androidOnlineEnabled) {
           setStreamError({
             message:
-              'That offline file is missing. Re-scan Library or like the track again from desktop once streaming returns on Android.',
+              'That offline file is missing. Re-scan Library, or enable Android online playback in Settings when all device checks pass.',
             trackTitle: track.title,
             trackArtist: track.artist,
             source: track.source,
@@ -1404,11 +1799,11 @@ function App() {
       }
     }
 
-    // Android preview: no online resolve (yt-dlp / Piped were failing on device).
-    if (isAndroidOs) {
+    // Android online resolve is allowed only after local capability checks and explicit opt-in.
+    if (isAndroidOs && !androidOnlineEnabled) {
       setStreamError({
         message:
-          'Online streaming is off in this Android build. Open Library, scan your music, and play files on the phone. Search and streaming will come back later.',
+          'Android online playback is off. Open Settings to review device checks; Library playback remains available.',
         trackTitle: track.title,
         trackArtist: track.artist,
         source: track.source,
@@ -1445,6 +1840,9 @@ function App() {
     if (requestId !== playRequestRef.current) return;
     if (resolvedUrl) {
       if (requestId !== playRequestRef.current) return;
+      if (opts?.resumePositionMs && opts.resumePositionMs > 0) {
+        await seek(opts.resumePositionMs);
+      }
       const isPreview = resolvedUrl.startsWith('PREVIEW:');
       const actualUrl = isPreview ? resolvedUrl.replace('PREVIEW:', '') : resolvedUrl;
       setExternalTrack((prev: any) => {
@@ -1500,15 +1898,121 @@ function App() {
   };
 
   // Clear externalTrack when playing a local track
-  const handlePlayLocalTrack = (filepath: string) => {
+  const handlePlayLocalTrack = async (
+    filepath: string,
+    opts?: { rebuildQueue?: boolean; resumePositionMs?: number },
+  ) => {
+    if (!opts?.resumePositionMs) {
+      restoredTrackRef.current = null;
+      restoredPositionRef.current = 0;
+    }
+    const requestId = ++playRequestRef.current;
     setExternalTrack(null);
-    playTrack(filepath);
+    if (opts?.rebuildQueue !== false && tracks.length > 0) {
+      const list = tracksToQueue(tracks);
+      playQueue.playFromList(list, filepath);
+    }
+    try {
+      await playTrack(filepath);
+      if (requestId !== playRequestRef.current) return;
+      if (opts?.resumePositionMs && opts.resumePositionMs > 0) {
+        await seek(opts.resumePositionMs);
+      }
+      setStreamError(null);
+      void invoke('append_history', { filepath })
+        .then(() => playlistStore.refresh())
+        .catch((error) => console.warn('History update failed:', error));
+    } catch (e) {
+      if (requestId !== playRequestRef.current) return;
+      const msg = String(e).replace(/^Error:\s*/i, '');
+      setStreamError({
+        message: msg.includes('content:')
+          ? 'Could not play local file — re-import with Add songs, or Scan device music.'
+          : (msg || 'Could not play local file. Check it still exists and audio permission is granted.'),
+      });
+      setTimeout(() => setStreamError(null), 10000);
+    }
   };
 
-  // Unified next/prev — prefer explicit play queue
+  const handlePlayLibraryAll = (shuffle = false) => {
+    handlePlayTrackList(tracks, shuffle);
+  };
+
+  const handlePlayTrackList = (list: TrackData[], shuffle = false, startPath?: string) => {
+    if (!list.length) return;
+    let queue = tracksToQueue(list);
+    if (shuffle) {
+      queue = [...queue].sort(() => Math.random() - 0.5);
+    }
+    let idx = 0;
+    if (startPath) {
+      const found = queue.findIndex((t) => t.id === startPath);
+      idx = found >= 0 ? found : 0;
+    }
+    if (playlistQueueMode === 'append' && playQueue.queue.length > 0) {
+      playQueue.appendQueue(queue);
+      return;
+    }
+    playQueue.replaceQueue(queue, idx);
+    void handlePlayLocalTrack(queue[idx].id, { rebuildQueue: false });
+  };
+
+  const openPlaylist = async (playlist: { id: number; name: string; is_history: boolean }) => {
+    const rows = await playlistStore.getTracks(playlist.id);
+    setPlaylistTracks(rows);
+    setLibraryFocus({ kind: 'playlist', id: playlist.id, name: playlist.name, isHistory: playlist.is_history });
+  };
+
+  const removePlaylistTrack = async (playlistId: number, filepath: string) => {
+    await playlistStore.removeTrack(playlistId, filepath);
+    setPlaylistTracks(await playlistStore.getTracks(playlistId));
+  };
+
+  const openArtistPage = (artist: string) => {
+    const name = (artist || '').trim();
+    if (!name) return;
+    const localHits = findArtistTracks(tracks, name);
+    if (localHits.length > 0) {
+      setLibraryFocus({ kind: 'artist', name: localHits[0].artist || name });
+      setLibrarySubTab('artists');
+      setActiveTab('library');
+      setIsExpanded(false);
+      return;
+    }
+    if (androidOnlineEnabled) {
+      setPendingAutoplayQuery(null);
+      setSearchQuery(name);
+      setSearchSource('all');
+      setActiveTab('browse');
+      setIsExpanded(false);
+      return;
+    }
+    setActiveTab('library');
+    setIsExpanded(false);
+  };
+
+  const openAlbumPage = (album: string, artist: string) => {
+    const a = (album || '').trim();
+    const ar = (artist || '').trim();
+    if (!a) return;
+    const hits = findAlbumTracks(tracks, a, ar);
+    if (hits.length > 0) {
+      setLibraryFocus({ kind: 'album', name: hits[0].album || a, artist: hits[0].artist || ar });
+      setLibrarySubTab('albums');
+      setActiveTab('library');
+      setIsExpanded(false);
+    }
+  };
+
+  // Unified next/prev — prefer explicit play queue (local Play All uses file paths)
   const handleNextTrack = () => {
     const next = playQueue.advance(autoLoopLiked && externalTrack?.playbackContext === 'liked');
     if (next) {
+      if (isLocalQueueTrack(next)) {
+        void handlePlayLocalTrack(next.stream_url || next.id, { rebuildQueue: false });
+        if (next.artwork_url) setCoverArt(next.artwork_url);
+        return;
+      }
       handleStreamExternalAudio(
         { ...next, stream_url: next.stream_url || getTrackPlaybackUrl(next) },
         next.playbackContext === 'liked' ? 'liked' : 'search',
@@ -1548,6 +2052,11 @@ function App() {
   const handlePrevTrack = () => {
     const prev = playQueue.retreat();
     if (prev) {
+      if (isLocalQueueTrack(prev)) {
+        void handlePlayLocalTrack(prev.stream_url || prev.id, { rebuildQueue: false });
+        if (prev.artwork_url) setCoverArt(prev.artwork_url);
+        return;
+      }
       handleStreamExternalAudio(
         { ...prev, stream_url: prev.stream_url || getTrackPlaybackUrl(prev) },
         prev.playbackContext === 'liked' ? 'liked' : 'search',
@@ -1576,9 +2085,157 @@ function App() {
     }
   };
 
+  const resumeRestoredTrack = async () => {
+    const track = restoredTrackRef.current;
+    if (!track) {
+      await resumePlayback();
+      return;
+    }
+    const positionMs = restoredPositionRef.current;
+    restoredTrackRef.current = null;
+    restoredPositionRef.current = 0;
+    if (isLocalQueueTrack(track)) {
+      await handlePlayLocalTrack(track.stream_url || track.id, {
+        rebuildQueue: false,
+        resumePositionMs: positionMs,
+      });
+    } else {
+      await handleStreamExternalAudio(
+        { ...track, stream_url: track.stream_url || getTrackPlaybackUrl(track) },
+        track.playbackContext === 'liked' ? 'liked' : 'search',
+        { skipQueueRebuild: true, resumePositionMs: positionMs },
+      );
+    }
+  };
+
+  const handleTogglePlayback = () => {
+    if (!isPlayingRef.current && restoredTrackRef.current) {
+      void resumeRestoredTrack();
+      return;
+    }
+    void togglePause();
+  };
+
   onNextRef.current = handleNextTrack;
   onPrevRef.current = handlePrevTrack;
-  onTogglePlayRef.current = () => togglePause();
+  onTogglePlayRef.current = handleTogglePlayback;
+
+  // Native Android MediaSession actions arrive through MainActivity's durable WebView bridge.
+  // Every action is explicit so a duplicated platform callback cannot invert play/pause state.
+  useEffect(() => {
+    if (!isAndroidOs) return;
+    const nativeWindow = window as any;
+    const handleNativeMediaAction = (event: Event) => {
+      const detail = (event as CustomEvent<{ action?: string; positionMs?: number }>).detail;
+      switch (detail?.action) {
+        case 'play':
+          if (!isPlayingRef.current) onTogglePlayRef.current?.();
+          break;
+        case 'pause':
+        case 'stop':
+          if (isPlayingRef.current && !isResumeGuarded()) pausePlaybackRef.current();
+          break;
+        case 'previous':
+          onPrevRef.current?.();
+          break;
+        case 'next':
+          onNextRef.current?.();
+          break;
+        case 'seek_to':
+          if (typeof detail.positionMs === 'number') {
+            const duration = getAudioClock().durationMs;
+            const target = Math.max(0, detail.positionMs);
+            seekPlaybackRef.current(duration > 0 ? Math.min(target, duration) : target);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('nekobeat-native-media-action', handleNativeMediaAction);
+    nativeWindow.__nekobeatNativeMediaReady = true;
+    const queued = Array.isArray(nativeWindow.__nekobeatNativeMediaQueue)
+      ? nativeWindow.__nekobeatNativeMediaQueue.splice(0)
+      : [];
+    queued.forEach((detail: unknown) => {
+      handleNativeMediaAction(new CustomEvent('nekobeat-native-media-action', { detail }));
+    });
+
+    return () => {
+      nativeWindow.__nekobeatNativeMediaReady = false;
+      window.removeEventListener('nekobeat-native-media-action', handleNativeMediaAction);
+    };
+  }, [isAndroidOs]);
+
+  // Hydrate queue metadata without starting audio. The first explicit Play resumes it.
+  useEffect(() => {
+    if (!playbackRestore) {
+      setPlaybackStateLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    invoke<PersistedPlaybackState>('load_playback_state')
+      .then((state) => {
+        if (cancelled) return;
+        const queue = Array.isArray(state.queue) ? state.queue : [];
+        playQueue.restoreQueue(queue, state.currentIndex, state.shuffleEnabled);
+        setAutoLoopLiked(!!state.loopEnabled);
+        const restored = state.currentTrack || queue[state.currentIndex] || null;
+        if (restored) {
+          restoredTrackRef.current = restored;
+          restoredPositionRef.current = Math.max(0, state.positionMs || 0);
+          setExternalTrack({
+            ...restored,
+            filepath: restored.id,
+            playbackContext: restored.playbackContext || 'queue',
+          });
+          setCoverArt(restored.artwork_url || null);
+          seedAudioClockDuration(restored.duration_ms || 0);
+        }
+      })
+      .catch((error) => console.warn('Playback state restore failed:', error))
+      .finally(() => {
+        if (!cancelled) setPlaybackStateLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, []); // restore exactly once
+
+  const persistPlaybackState = useCallback(() => {
+    if (!playbackStateLoaded || !playbackRestore) return;
+    const current = playQueue.current || (playerTrack as QueueTrack | null);
+    const state: PersistedPlaybackState = {
+      version: 1,
+      queue: playQueue.queue,
+      currentIndex: playQueue.currentIndex,
+      loopEnabled: autoLoopLiked,
+      shuffleEnabled: playQueue.shuffleEnabled,
+      currentTrack: current || null,
+      positionMs: Math.max(0, Math.floor(getAudioClock().positionMs)),
+    };
+    invoke('save_playback_state', { state }).catch((error) => {
+      console.warn('Playback state save failed:', error);
+    });
+  }, [
+    playbackStateLoaded,
+    playbackRestore,
+    playQueue.queue,
+    playQueue.currentIndex,
+    playQueue.current,
+    playQueue.shuffleEnabled,
+    autoLoopLiked,
+    playerTrack?.id,
+    playerTrack?.filepath,
+  ]);
+
+  // Debounce structural changes and checkpoint the playback clock every five seconds.
+  useEffect(() => {
+    if (!playbackStateLoaded) return;
+    const timeout = window.setTimeout(persistPlaybackState, 750);
+    const interval = window.setInterval(persistPlaybackState, 5000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [playbackStateLoaded, persistPlaybackState]);
 
   const handleUploadLyrics = async () => {
     if (!playerTrack) return;
@@ -1652,7 +2309,7 @@ function App() {
       }
 
       // Only hit iTunes when artwork is missing / placeholder (skip when we have offline art)
-      if (!hasArt) {
+      if (!hasArt && coverFallback) {
         fetchAlbumArt(playerTrack.title, playerTrack.artist).then(url => {
           if (!stale && url) {
             setCoverArt(url);
@@ -1664,12 +2321,21 @@ function App() {
         });
       }
 
-      // Apply local lyrics immediately; network only if missing
+      // Harmonoid-style: use synced local immediately; plain local does NOT block online synced fetch
       const localLyrics = playerTrack.local_lyrics as string | undefined;
       const localIsSynced = !!(localLyrics && localLyrics.trim().startsWith('['));
       if (localIsSynced && localLyrics) {
         setParsedLyrics(parseLrc(localLyrics));
         setLyricsData({ syncedLyrics: localLyrics, source: 'local' });
+        // Seed Harmonoid-style disk cache from library/tag lyrics
+        const seedKey =
+          (playerTrack as any).id ||
+          playerTrack.filepath ||
+          currentTrackPath ||
+          `${playerTrack.title}|${playerTrack.artist}`;
+        if (seedKey) {
+          invoke('save_lyrics_cache', { cacheKey: seedKey, lyrics: localLyrics }).catch(() => {});
+        }
       } else if (localLyrics && !localIsSynced) {
         setParsedLyrics([]);
         setLyricsData({ plainLyrics: localLyrics, source: 'local' });
@@ -1688,42 +2354,68 @@ function App() {
       }
       setLyricsOffsetMs(savedOffset);
 
-      if (!localLyrics) {
+      // Always resolve when missing synced lyrics (cache → sidecar → online)
+      if (!localIsSynced) {
         let spotifyId = undefined;
         if (playerTrack.source === 'spotify' || (playerTrack as any).id?.startsWith('sp-')) {
-          let rawId = (playerTrack as any).id.replace('sp-', '');
+          let rawId = String((playerTrack as any).id || '').replace('sp-', '');
           const match = rawId.match(/track\/([a-zA-Z0-9]+)/);
           if (match) {
             spotifyId = match[1];
           } else {
-            spotifyId = rawId;
+            spotifyId = rawId || undefined;
           }
         }
 
-        fetchLyrics(playerTrack.title, playerTrack.artist, playerTrack.album, durationMs || playerTrack.duration_ms, spotifyId).then(data => {
+        const isLocal = !playerTrack.source || playerTrack.source === 'local';
+        const fp = isLocal ? (playerTrack.filepath || currentTrackPath || null) : null;
+        const cacheKey =
+          (playerTrack as any).id ||
+          playerTrack.filepath ||
+          (playerTrack as any).stream_url ||
+          currentTrackPath ||
+          `${playerTrack.title}|${playerTrack.artist}`;
+
+        fetchLyrics(
+          playerTrack.title,
+          playerTrack.artist,
+          playerTrack.album || '',
+          durationMs || playerTrack.duration_ms || 0,
+          spotifyId,
+          {
+            cacheKey,
+            filepath: fp,
+            readSidecar: isLocal ? lrcFromDirectory : false,
+          },
+        ).then(data => {
           if (stale) return;
-          setLyricsData(data);
-          if (data && data.syncedLyrics) {
+          if (!data) return;
+          // Prefer synced; keep existing plain if online only returns empty
+          if (data.syncedLyrics) {
+            setLyricsData(data);
             setParsedLyrics(parseLrc(data.syncedLyrics));
-          } else {
+          } else if (data.plainLyrics && !localLyrics) {
+            setLyricsData(data);
             setParsedLyrics([]);
           }
-          const text = data?.syncedLyrics || data?.plainLyrics;
+          const text = data.syncedLyrics || data.plainLyrics;
           if (!text) return;
-          const fp = playerTrack.filepath;
-          if (fp && (!playerTrack.source || playerTrack.source === 'local')) {
+          if (fp) {
             patchTrack(fp, { local_lyrics: text });
             invoke('update_track_lyrics', {
               trackId: fp,
               filepath: fp,
               lyrics: text,
-            }).catch(() => { /* non-fatal */ });
+            }).catch(() => { /* non-fatal — cache already written in Rust */ });
           } else if ((playerTrack as any).playbackContext === 'liked' || likedTracks.some(t => t.id === playerTrack.id)) {
             invoke('update_track_lyrics', {
               trackId: playerTrack.id,
               filepath: null,
               lyrics: text,
             }).catch(() => { /* non-fatal */ });
+          } else {
+            // Browse / stream: ensure hash cache via explicit save (Rust get_lyrics already wrote)
+            invoke('save_lyrics_cache', { cacheKey, lyrics: text }).catch(() => {});
           }
         });
       }
@@ -1733,15 +2425,15 @@ function App() {
       setParsedLyrics([]);
     }
     return () => { stale = true; };
-  }, [playerTrack?.id, playerTrack?.filepath, currentTrackPath, patchTrack]);
+  }, [playerTrack?.id, playerTrack?.filepath, currentTrackPath, patchTrack, lrcFromDirectory, coverFallback]);
 
   // MediaSession action handlers — bind once; always call latest via refs.
   // Critical: MediaPlayPause also hits the global shortcut; resume guard + explicit
   // play/pause (never toggle) prevents Resume→immediate Pause.
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
+    if (usesNativeAndroidMediaSession || !('mediaSession' in navigator)) return;
     navigator.mediaSession.setActionHandler('play', () => {
-      if (!isPlayingRef.current) resumePlaybackRef.current();
+      if (!isPlayingRef.current) onTogglePlayRef.current?.();
     });
     navigator.mediaSession.setActionHandler('pause', () => {
       if (isResumeGuarded()) return;
@@ -1753,26 +2445,45 @@ function App() {
     navigator.mediaSession.setActionHandler('nexttrack', () => {
       onNextRef.current?.();
     });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (typeof details.seekTime !== 'number') return;
+      const duration = getAudioClock().durationMs;
+      const target = details.seekTime * 1000;
+      seekPlaybackRef.current(duration > 0 ? Math.min(target, duration) : target);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      const clock = getAudioClock();
+      const target = clock.positionMs + (details.seekOffset ?? 10) * 1000;
+      seekPlaybackRef.current(clock.durationMs > 0 ? Math.min(target, clock.durationMs) : target);
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      const target = getAudioClock().positionMs - (details.seekOffset ?? 10) * 1000;
+      seekPlaybackRef.current(Math.max(0, target));
+    });
     return () => {
       navigator.mediaSession.setActionHandler('play', null);
       navigator.mediaSession.setActionHandler('pause', null);
       navigator.mediaSession.setActionHandler('previoustrack', null);
       navigator.mediaSession.setActionHandler('nexttrack', null);
+      navigator.mediaSession.setActionHandler('seekto', null);
+      navigator.mediaSession.setActionHandler('seekforward', null);
+      navigator.mediaSession.setActionHandler('seekbackward', null);
     };
-  }, []);
+  }, [usesNativeAndroidMediaSession]);
 
-  // Sync MediaSession metadata + SMTC silent wake (track/art only — not every clock tick)
+  // Sync MediaSession metadata + SMTC silent wake (track/art/lyric line)
   useEffect(() => {
-    if (!('mediaSession' in navigator) || !playerTrack) return;
+    if (usesNativeAndroidMediaSession || !('mediaSession' in navigator) || !playerTrack) return;
     try {
       const artworkUrl = playerTrack.artwork_url?.startsWith('http')
         ? playerTrack.artwork_url
         : (playerTrack.artwork_url ? convertFileSrc(playerTrack.artwork_url) : (coverArt || convertFileSrc(logoImg)));
 
+      const formatChip = techLabel(playerTrack);
       navigator.mediaSession.metadata = new MediaMetadata({
         title: stripExtension(playerTrack.title),
         artist: playerTrack.artist,
-        album: 'NekoBeat',
+        album: nowPlayingLyric || formatChip || 'NekoBeat',
         artwork: [{ src: artworkUrl, sizes: '512x512', type: 'image/png' }],
       });
       document.title = `${stripExtension(playerTrack.title)} - ${playerTrack.artist} | NekoBeat`;
@@ -1789,11 +2500,92 @@ function App() {
     } catch (err) {
       invoke('log_frontend', { msg: `MediaSession Error: ${err}` }).catch(() => {});
     }
-  }, [playerTrack?.id, playerTrack?.title, playerTrack?.artist, playerTrack?.artwork_url, coverArt, isPlaying]);
+  }, [playerTrack?.id, playerTrack?.title, playerTrack?.artist, playerTrack?.artwork_url, coverArt, isPlaying, nowPlayingLyric, usesNativeAndroidMediaSession]);
+
+  // Keep Android's native MediaSession in sync with the Rust/GStreamer player.
+  useEffect(() => {
+    if (!isAndroidOs || !playerTrack || !currentTrackPath) return;
+    const artworkUrl = playerTrack.artwork_url || coverArt || '';
+    void (async () => {
+      try {
+        await invoke('start_android_playback_service');
+        await invoke('update_android_playback_metadata', {
+          title: stripExtension(playerTrack.title),
+          artist: playerTrack.artist || '',
+          album: playerTrack.album || '',
+          artworkUrl,
+          durationMs: Math.max(0, durationMs || playerTrack.duration_ms || 0),
+        });
+      } catch (err) {
+        console.warn('Native Android playback metadata sync failed:', err);
+      }
+    })();
+  }, [
+    isAndroidOs,
+    currentTrackPath,
+    playerTrack?.id,
+    playerTrack?.filepath,
+    playerTrack?.title,
+    playerTrack?.artist,
+    playerTrack?.album,
+    playerTrack?.artwork_url,
+    playerTrack?.duration_ms,
+    coverArt,
+    durationMs,
+  ]);
+
+  useEffect(() => {
+    if (!isAndroidOs || !currentTrackPath) return;
+    const syncState = () => {
+      const clock = getAudioClock();
+      invoke('update_android_playback_state', {
+        isPlaying: isPlayingRef.current,
+        positionMs: Math.max(0, Math.floor(clock.positionMs)),
+        durationMs: Math.max(0, Math.floor(clock.durationMs || durationMs || 0)),
+        playbackRate: portablePlayback.playbackRate,
+      }).catch(() => {});
+    };
+    syncState();
+    if (!isPlaying) return;
+    const id = window.setInterval(syncState, 1000);
+    return () => window.clearInterval(id);
+  }, [isAndroidOs, currentTrackPath, isPlaying, durationMs, portablePlayback.playbackRate]);
+
+  useEffect(() => {
+    if (!isAndroidOs || currentTrackPath) return;
+    invoke('stop_android_playback_service').catch(() => {});
+  }, [isAndroidOs, currentTrackPath]);
+
+  const handleActiveLyricLine = useCallback((line: string, _index: number, context: string) => {
+    setNowPlayingLyric(line);
+    if (!isAndroidOs || !notificationLyrics || !playerTrack) return;
+    invoke('update_lyrics_notification', {
+      title: stripExtension(playerTrack.title),
+      artist: playerTrack.artist || '',
+      line: context || line || '…',
+    }).catch(() => {});
+  }, [isAndroidOs, notificationLyrics, playerTrack?.title, playerTrack?.artist, playerTrack?.id]);
+
+  // Reset lyric line + clear Android lyrics notif on track change / stop
+  useEffect(() => {
+    setNowPlayingLyric('');
+    if (!isAndroidOs) return;
+    invoke('clear_lyrics_notification_cmd').catch(() => {});
+  }, [playerTrack?.id, playerTrack?.filepath, isAndroidOs]);
+
+  useEffect(() => {
+    if (!isAndroidOs || isPlaying) return;
+    invoke('clear_lyrics_notification_cmd').catch(() => {});
+  }, [isPlaying, isAndroidOs]);
+
+  useEffect(() => {
+    if (!isAndroidOs || notificationLyrics) return;
+    invoke('clear_lyrics_notification_cmd').catch(() => {});
+  }, [isAndroidOs, notificationLyrics]);
 
   // Position state for lock screen — throttled, no silent-audio / handler rebind
   useEffect(() => {
-    if (!('mediaSession' in navigator) || !playerTrack || durationMs <= 0) return;
+    if (usesNativeAndroidMediaSession || !('mediaSession' in navigator) || !playerTrack || durationMs <= 0) return;
     if (!('setPositionState' in navigator.mediaSession)) return;
     const id = setInterval(() => {
       if (!isPlayingRef.current) return;
@@ -1801,15 +2593,20 @@ function App() {
       try {
         navigator.mediaSession.setPositionState({
           duration: durationMs / 1000,
-          playbackRate: 1,
+          playbackRate: portablePlayback.playbackRate,
           position: Math.min(pos / 1000, durationMs / 1000),
         });
       } catch { /* invalid position state — ignore */ }
     }, 1000);
     return () => clearInterval(id);
-  }, [playerTrack?.id, durationMs]);
+  }, [playerTrack?.id, durationMs, usesNativeAndroidMediaSession, portablePlayback.playbackRate]);
 
-  // Find active lyric index — handled inside LyricsDisplay via useAudioClock
+  useEffect(() => {
+    if (!expandOnPlay || !isPlaying || !playerTrack) return;
+    setIsExpanded(true);
+  }, [playerTrack?.id, playerTrack?.filepath]); // eslint-disable-line react-hooks/exhaustive-deps -- only open on track change
+
+  const techLabel = (t: any) => (showAudioFormat ? audioFormatLabel(t) : '');
 
   // Keep a ref with the latest positionMs so async callbacks get the current value
   const positionMsRef = useRef(0);
@@ -1915,18 +2712,7 @@ function App() {
   };
 
   const searchArtist = (artist: string) => {
-    const q = (artist || '').trim();
-    if (!q) return;
-    if (isAndroidOs) {
-      setIsExpanded(false);
-      setActiveTab('library');
-      return;
-    }
-    setPendingAutoplayQuery(null);
-    setSearchQuery(q);
-    setSearchSource('all');
-    setActiveTab('browse');
-    setIsExpanded(false);
+    openArtistPage(artist);
   };
 
   useEffect(() => {
@@ -1935,6 +2721,7 @@ function App() {
       try {
         const plat = await invoke<string>('runtime_platform');
         if (!cancelled) {
+          setRuntimePlatform(plat);
           setIsMobileOs(plat === 'android' || plat === 'ios');
           setIsAndroidOs(plat === 'android');
           if (plat === 'android') {
@@ -1945,6 +2732,7 @@ function App() {
         const ua = navigator.userAgent || '';
         if (!cancelled) {
           const android = /Android/i.test(ua);
+          setRuntimePlatform(android ? 'android' : 'unknown');
           setIsMobileOs(/Android|iPhone|iPad/i.test(ua));
           setIsAndroidOs(android);
           if (android) {
@@ -1955,6 +2743,108 @@ function App() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  const refreshAndroidPermissions = useCallback(() => {
+    if (!isAndroidOs) return;
+    invoke<AndroidPermissionStatus>('get_android_permission_status')
+      .then(setAndroidPermissions)
+      .catch((error) => console.warn('Android permission status failed:', error));
+  }, [isAndroidOs]);
+
+  const refreshAndroidStreamingCapabilities = useCallback(() => {
+    if (!isAndroidOs) return;
+    setAndroidCapabilitiesError('');
+    invoke<AndroidStreamingCapabilities>('android_streaming_capabilities')
+      .then(setAndroidStreamingCapabilities)
+      .catch((error) => {
+        setAndroidStreamingCapabilities(null);
+        setAndroidCapabilitiesError(String(error).replace(/^Error:\s*/i, ''));
+      });
+  }, [isAndroidOs]);
+
+  const runAndroidStreamingDiagnostics = useCallback(async () => {
+    if (!isAndroidOs || androidDiagnosticsRunning) return;
+    setAndroidDiagnosticsRunning(true);
+    setAndroidDiagnostics(null);
+    try {
+      const result = await invoke<AndroidStreamingDiagnostics>('android_streaming_smoke_test');
+      setAndroidDiagnostics(result);
+    } catch (error) {
+      setAndroidDiagnostics({
+        youtube: { available: false, detail: 'Not tested' },
+        soundcloud: { available: false, detail: 'Not tested' },
+        spotifyMatch: { available: false, detail: 'Not tested' },
+        note: String(error).replace(/^Error:\s*/i, ''),
+      });
+    } finally {
+      setAndroidDiagnosticsRunning(false);
+    }
+  }, [isAndroidOs, androidDiagnosticsRunning]);
+
+  useEffect(() => {
+    if (!isAndroidOs) return;
+    refreshAndroidStreamingCapabilities();
+  }, [isAndroidOs, refreshAndroidStreamingCapabilities]);
+
+  useEffect(() => {
+    if (!isAndroidOs || androidOnlineEnabled) return;
+    setActiveTab((tab) => (tab === 'listen' || tab === 'browse' ? 'library' : tab));
+  }, [isAndroidOs, androidOnlineEnabled]);
+
+  const requestAndroidPermission = useCallback(async (kind: 'audio' | 'notifications') => {
+    setPermissionRequesting(kind);
+    try {
+      await invoke('request_android_permission', { kind });
+      window.setTimeout(refreshAndroidPermissions, 400);
+    } catch (error) {
+      console.warn(`Android ${kind} permission request failed:`, error);
+    } finally {
+      setPermissionRequesting(null);
+    }
+  }, [refreshAndroidPermissions]);
+
+  useEffect(() => {
+    if (!isAndroidOs || activeTab !== 'settings') return;
+    refreshAndroidPermissions();
+    window.addEventListener('focus', refreshAndroidPermissions);
+    return () => window.removeEventListener('focus', refreshAndroidPermissions);
+  }, [isAndroidOs, activeTab, refreshAndroidPermissions]);
+
+  useEffect(() => {
+    if (runtimePlatform !== 'windows') return;
+    const sync = () => {
+      const clock = getAudioClock();
+      const active = !!playerTrack;
+      const state = !windowsTaskbarProgress || !active
+        ? 'none'
+        : streamError
+          ? 'error'
+          : isPlaying
+            ? 'normal'
+            : 'paused';
+      void invoke('set_windows_taskbar_progress', {
+        state,
+        completed: Math.max(0, Math.floor(clock.positionMs)),
+        total: Math.max(1, Math.floor(clock.durationMs || durationMs || playerTrack?.duration_ms || 1)),
+      }).catch((error) => console.warn('Taskbar progress update failed:', error));
+    };
+    sync();
+    const interval = windowsTaskbarProgress && playerTrack
+      ? window.setInterval(sync, 500)
+      : undefined;
+    return () => {
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [
+    runtimePlatform,
+    windowsTaskbarProgress,
+    playerTrack?.id,
+    playerTrack?.filepath,
+    playerTrack?.duration_ms,
+    durationMs,
+    isPlaying,
+    streamError,
+  ]);
 
   /** Desktop: folder picker. Mobile: directory picker is broken — use scan / multi-file. */
   const handleScanClick = async () => {
@@ -1989,21 +2879,18 @@ function App() {
         directory: false,
         filters: [{
           name: 'Audio',
-          extensions: ['mp3', 'flac', 'm4a', 'wav', 'ogg', 'opus', 'aac', 'wma'],
+          extensions: ['mp3', 'flac', 'm4a', 'mp4', 'wav', 'ogg', 'opus', 'aac', 'wma', 'aiff', 'aif', 'wv', 'ape', 'webm', 'dsf', 'dff'],
         }],
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
-      const usable = paths.filter((p) => typeof p === 'string' && !String(p).startsWith('content:'));
-      if (usable.length === 0 && paths.length > 0) {
-        window.alert(
-          'Android shared files (content://) need a rebuild with SAF import. Use Scan device music after allowing audio access, or copy songs into Music/Download first.',
-        );
-        // Still try — some builds resolve content URIs to readable cache paths
-      }
       const imported = await importAudioFiles(paths as string[]);
       if (!imported?.length) {
-        window.alert('No playable audio files were imported. Prefer Scan device music on Android.');
+        window.alert(
+          isAndroidOs
+            ? 'No playable files imported. Prefer Scan device music, or pick again — shared files are copied into app storage now.'
+            : 'No playable audio files were imported.',
+        );
       }
     } catch (e) {
       window.alert(String(e).replace(/^Error:\s*/i, '') || 'Could not add songs.');
@@ -2082,8 +2969,8 @@ function App() {
             </button>
             <button
               type="button"
-              onClick={togglePause}
-              disabled={!currentTrackPath}
+              onClick={handleTogglePlayback}
+              disabled={!playerTrack}
               className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-40 ${isBuffering ? "bg-[var(--color-neon-yellow)]/30 animate-pulse" : "bg-[var(--color-neon-yellow)] text-black shadow-lg hover:scale-110 active:scale-95"}`}
               aria-label={isPlaying ? "Pause" : "Play"}
             >
@@ -2158,7 +3045,7 @@ function App() {
                 </h4>
                 <p className="text-xs text-neutral-400 mt-1 leading-relaxed">{streamError.message}</p>
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
-                  {!isAndroidOs && (
+                  {androidOnlineEnabled && (
                   <button
                     onClick={() => {
                       const q = `${streamError.trackTitle || ''} ${streamError.trackArtist || ''}`.trim();
@@ -2176,7 +3063,7 @@ function App() {
                     Search on YouTube
                   </button>
                   )}
-                  {isAndroidOs && (
+                  {isAndroidOs && !androidOnlineEnabled && (
                   <button
                     onClick={() => {
                       setActiveTab('library');
@@ -2231,7 +3118,7 @@ function App() {
         </div>
 
         <nav className="flex flex-row md:flex-col gap-1 md:gap-2 w-full justify-around md:justify-start">
-          {!isAndroidOs && (
+          {androidOnlineEnabled && (
             <>
               <NavItem icon={<Home size={22} />} label="Listen" active={activeTab === 'listen'} onClick={() => setActiveTab('listen')} />
               <NavItem icon={<Search size={22} />} label="Browse" active={activeTab === 'browse'} onClick={() => setActiveTab('browse')} />
@@ -2256,118 +3143,58 @@ function App() {
               exit={{ y: -20, opacity: 0 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
             >
-              {isAndroidOs && <AndroidScopeBanner />}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 mb-6 md:mb-8">
-                <h1 className="text-3xl sm:text-4xl md:text-5xl font-display font-black text-white tracking-tighter leading-none">Your Library</h1>
-                <div className="flex flex-wrap items-center gap-2">
-                  <ViewToggle viewMode={viewMode} onChange={setViewMode} />
-                  {isMobileOs ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={handleScanClick}
-                        disabled={isScanning}
-                        className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-xs disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_8px_20px_rgba(219,255,0,0.35)]"
-                      >
-                        <FolderSearch size={15} className="shrink-0" />
-                        <span>{isScanning ? "Scanning…" : "Scan music"}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleAddSongsClick}
-                        disabled={isScanning}
-                        className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 px-3 whitespace-nowrap bg-white/10 text-white border border-white/15 rounded-xl font-bold text-xs disabled:opacity-50"
-                      >
-                        <Music size={15} className="shrink-0" />
-                        <span>Add songs</span>
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleScanClick}
-                      disabled={isScanning}
-                      className="inline-flex h-11 shrink-0 items-center justify-center gap-2 px-5 whitespace-nowrap bg-gradient-to-b from-[var(--color-neon-yellow)] to-[#c4e600] text-black rounded-xl font-bold text-sm disabled:opacity-50 shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_10px_30px_rgba(219,255,0,0.4)] hover:shadow-[inset_0_2px_4px_rgba(255,255,255,0.6),0_15px_40px_rgba(219,255,0,0.6)] hover:-translate-y-1"
-                    >
-                      <FolderOpen size={16} className="shrink-0" />
-                      <span>{isScanning ? "Scanning folder…" : "Add folder"}</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {tracks.length === 0 ? (
-                <div className="py-20 px-6 text-center max-w-md mx-auto space-y-4">
-                  <Library size={48} className="mx-auto mb-2 text-[var(--color-neon-yellow)]/70" />
-                  <h2 className="text-xl font-display font-black text-white tracking-tight">Your library is empty</h2>
-                  <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">
-                    {isMobileOs
-                      ? "Allow audio permission, then scan Music/Download — or pick songs manually. Folder picker does not work on Android."
-                      : "Add a folder of MP3, FLAC, or WAV files to play offline from this device."}
-                  </p>
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-                    <button
-                      onClick={handleScanClick}
-                      disabled={isScanning}
-                      className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-[var(--color-neon-yellow)] text-black rounded-xl font-bold text-sm disabled:opacity-50"
-                    >
-                      {isMobileOs ? <FolderSearch size={16} /> : <FolderOpen size={16} />}
-                      {isScanning
-                        ? "Scanning…"
-                        : isMobileOs
-                          ? "Scan device music"
-                          : "Add a music folder"}
-                    </button>
-                    {isMobileOs && (
-                      <button
-                        onClick={handleAddSongsClick}
-                        disabled={isScanning}
-                        className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-white/10 text-white border border-white/15 rounded-xl font-bold text-sm disabled:opacity-50"
-                      >
-                        <Music size={16} />
-                        Add songs
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ) : viewMode === 'grid' ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 md:gap-6">
-                  {tracks.map((track, i) => (
-                    <AlbumCard
-                      key={track.filepath}
-                      index={i}
-                      title={track.title}
-                      artist={track.artist}
-                      artworkUrl={track.artwork_url}
-                      source={track.source || 'local'}
-                      onArtResolved={(url) => patchTrack(track.filepath, { artwork_url: url })}
-                      onClick={() => (!track.source || track.source === 'local') ? handlePlayLocalTrack(track.filepath) : handleStreamExternalAudio(track)}
-                      isPlaying={currentTrackPath === track.filepath && isPlaying}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {tracks.map((track) => (
-                    <TrackResult
-                      key={track.filepath}
-                      track={{
-                        id: track.id || track.filepath,
-                        title: track.title,
-                        artist: track.artist,
-                        album: track.album,
-                        duration_ms: track.duration_ms,
-                        artwork_url: track.artwork_url || placeholderArt(track.title),
-                        source: track.source || 'local',
-                        stream_url: track.filepath
-                      }}
-                      onPlay={() => (!track.source || track.source === 'local') ? handlePlayLocalTrack(track.filepath) : handleStreamExternalAudio(track)}
-                      currentTrackId={currentTrackPath}
-                      isCurrentlyPlaying={isPlaying && currentTrackPath === track.filepath}
-                    />
-                  ))}
-                </div>
-              )}
+              <LibraryPanel
+                tracks={tracks}
+                isScanning={isScanning}
+                isMobileOs={isMobileOs}
+                isPlaying={isPlaying}
+                currentTrackPath={currentTrackPath}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
+                librarySubTab={librarySubTab}
+                setLibrarySubTab={setLibrarySubTab}
+                librarySort={librarySort}
+                setLibrarySort={setLibrarySort}
+                libraryFocus={libraryFocus}
+                setLibraryFocus={setLibraryFocus}
+                techLabel={techLabel}
+                coverFallback={coverFallback}
+                showAudioFormat={showAudioFormat}
+                onScan={handleScanClick}
+                onAddSongs={handleAddSongsClick}
+                onPlayAll={handlePlayLibraryAll}
+                onPlayTrackList={handlePlayTrackList}
+                onPlayLocal={handlePlayLocalTrack}
+                onPlayNext={(track) => playQueue.insertNext(tracksToQueue([track])[0])}
+                onAddQueue={(track) => playQueue.enqueue(tracksToQueue([track])[0])}
+                onStreamExternal={handleStreamExternalAudio}
+                onOpenArtist={openArtistPage}
+                onOpenAlbum={openAlbumPage}
+                onOpenSettings={() => setActiveTab('settings')}
+                onArtResolved={(fp, url) => patchTrack(fp, { artwork_url: url })}
+                playlists={playlistStore.playlists}
+                playlistTracks={playlistTracks}
+                onCreatePlaylist={async (name) => { await playlistStore.create(name); }}
+                onRenamePlaylist={async (id, name) => { await playlistStore.rename(id, name); }}
+                onDeletePlaylist={async (id) => { await playlistStore.remove(id); }}
+                onOpenPlaylist={openPlaylist}
+                onAddToPlaylist={async (id, filepath) => { await playlistStore.addTrack(id, filepath); }}
+                onRemoveFromPlaylist={removePlaylistTrack}
+                onAddCurrentToPlaylist={async (id) => {
+                  const local = currentTrackPath && tracks.find((track) => track.filepath === currentTrackPath);
+                  if (!local) {
+                    window.alert('Play a local library track first.');
+                    return;
+                  }
+                  await playlistStore.addTrack(id, local.filepath);
+                  setPlaylistTracks(await playlistStore.getTracks(id));
+                }}
+                stripExtension={stripExtension}
+                ViewToggle={ViewToggle}
+                AlbumCard={AlbumCard}
+                TrackResult={TrackResult}
+                placeholderArt={placeholderArt}
+              />
             </motion.div>
           ) : activeTab === 'liked' ? (
             <motion.div
@@ -2387,16 +3214,16 @@ function App() {
                   <Heart size={48} className="mx-auto mb-2 text-[var(--color-neon-yellow)]/70" />
                   <h2 className="text-xl font-display font-black text-white tracking-tight">No liked songs yet</h2>
                   <p className="text-sm text-[var(--color-ink-muted)] leading-relaxed">
-                    {isAndroidOs
-                      ? 'Hearts on offline Library tracks show up here. Online likes from desktop stream elsewhere for now.'
+                    {!androidOnlineEnabled
+                      ? 'Heart a library track while it plays — it shows up here.'
                       : 'Tap the heart on any track while it plays — liked songs show up here for quick replay.'}
                   </p>
                   <button
                     type="button"
-                    onClick={() => setActiveTab(isAndroidOs ? 'library' : 'browse')}
+                    onClick={() => setActiveTab(androidOnlineEnabled ? 'browse' : 'library')}
                     className="inline-flex px-5 py-2.5 rounded-xl bg-[var(--color-neon-yellow)] text-black font-black text-sm uppercase tracking-wider"
                   >
-                    {isAndroidOs ? 'Open Library' : 'Find music to like'}
+                    {androidOnlineEnabled ? 'Find music to like' : 'Open Library'}
                   </button>
                 </div>
               ) : viewMode === 'grid' ? (
@@ -2413,6 +3240,8 @@ function App() {
                           : (toDisplayArtUrl(track.artwork_url, track.local_artwork_path) || track.artwork_url)
                       }
                       source={track.source}
+                      coverFallback={coverFallback}
+                      onArtistClick={() => openArtistPage(track.artist)}
                       onClick={() => handleStreamExternalAudio(track, 'liked')}
                       isPlaying={playerTrack?.id === track.id && isPlaying}
                     />
@@ -2427,7 +3256,12 @@ function App() {
                         (track.artwork_url && /^https?:\/\//i.test(track.artwork_url))
                           ? track.artwork_url
                           : (toDisplayArtUrl(track.artwork_url, track.local_artwork_path) || track.artwork_url),
-                    } as any} onPlay={() => handleStreamExternalAudio(track, 'liked')} currentTrackId={playerTrack?.id || null} isCurrentlyPlaying={isPlaying} />
+                    } as any}
+                      showFormat={showAudioFormat}
+                      onArtistClick={() => openArtistPage(track.artist)}
+                      onPlayNext={() => playQueue.insertNext(toExternalQueueTrack(track as any, 'liked'))}
+                      onAddQueue={() => playQueue.enqueue(toExternalQueueTrack(track as any, 'liked'))}
+                      onPlay={() => handleStreamExternalAudio(track, 'liked')} currentTrackId={playerTrack?.id || null} isCurrentlyPlaying={isPlaying} />
                   ))}
                 </div>
               )}
@@ -2517,6 +3351,8 @@ function App() {
                             artist={track.artist}
                             artworkUrl={track.artwork_url}
                             source={track.source}
+                            coverFallback={coverFallback}
+                            onArtistClick={() => openArtistPage(track.artist)}
                             onClick={() => {
                               const streamUrl = getTrackPlaybackUrl(track);
                               handleStreamExternalAudio({
@@ -2539,7 +3375,12 @@ function App() {
                     ) : (
                       <div className="flex flex-col gap-3">
                         {searchResults.map(track => (
-                          <TrackResult key={track.id} track={track} onPlay={(track) => {
+                          <TrackResult key={track.id} track={track}
+                            showFormat={showAudioFormat}
+                            onArtistClick={() => openArtistPage(track.artist)}
+                            onPlayNext={() => playQueue.insertNext(toExternalQueueTrack(track, 'search'))}
+                            onAddQueue={() => playQueue.enqueue(toExternalQueueTrack(track, 'search'))}
+                            onPlay={(track) => {
                             const streamUrl = getTrackPlaybackUrl(track);
                             handleStreamExternalAudio({
                               id: track.id,
@@ -2598,7 +3439,7 @@ function App() {
               <header className="space-y-2">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('listen')}
+                  onClick={() => setActiveTab(androidOnlineEnabled ? 'listen' : 'library')}
                   className="md:hidden inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[var(--color-ink-muted)] hover:text-[var(--color-neon-yellow)] min-h-[40px] -ml-1 px-1"
                 >
                   <ChevronDown className="rotate-90" size={16} />
@@ -2607,15 +3448,10 @@ function App() {
                 <p className="section-kicker">Preferences</p>
                 <h2 className="text-2xl sm:text-3xl font-display font-black text-white tracking-tight">Settings</h2>
                 <p className="text-sm text-[var(--color-ink-muted)] max-w-xl">
-                  {isAndroidOs
-                    ? 'EQ and library tools for music already on this phone.'
-                    : 'Sources, sound, and playback — tuned for phone, tablet, and desktop.'}
+                  Library, playback, and lyrics — neon NekoBeat style on phone and desktop.
                 </p>
               </header>
-
-              {isAndroidOs && <AndroidScopeSettingsCard />}
-
-              {!isAndroidOs && (
+              {androidOnlineEnabled && (
               <>
               <section className="settings-card space-y-4">
                 <div>
@@ -2674,10 +3510,180 @@ function App() {
               </>
               )}
 
-              {/* Equalizer — available on Android too; band apply is catch-wrapped / no auto-apply on Android open */}
-              <section className="settings-card">
-                <Equalizer />
-              </section>
+              {!isMobileOs && portablePlayback.capabilities && (
+                <section className="settings-card">
+                  <PortablePlaybackControls
+                    capabilities={portablePlayback.capabilities}
+                    playbackRate={portablePlayback.playbackRate}
+                    replayGainMode={portablePlayback.replayGainMode}
+                    replayGainPreamp={portablePlayback.replayGainPreamp}
+                    onPlaybackRateChange={portablePlayback.setPlaybackRate}
+                    onReplayGainModeChange={portablePlayback.setReplayGainMode}
+                    onReplayGainPreampChange={portablePlayback.setReplayGainPreamp}
+                  />
+                </section>
+              )}
+
+              {/* Equalizer — desktop only (Harmonoid has no EQ; NekoBeat desktop DSP) */}
+              {!isMobileOs && (
+                <section className="settings-card">
+                  <Equalizer />
+                </section>
+              )}
+
+              {(isAndroidOs || runtimePlatform === 'windows' || runtimePlatform === 'linux') && (
+                <section className="settings-card space-y-4">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-display font-bold text-white">Platform integration</h3>
+                    <p className="text-sm text-[var(--color-ink-muted)] mt-1">
+                      Native controls are enabled only where the operating system supports them.
+                    </p>
+                  </div>
+                  {isAndroidOs && (
+                    <>
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4 space-y-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="font-bold text-white">Online Listen & Browse</p>
+                          <p className="text-xs text-[var(--color-ink-muted)] mt-1 leading-relaxed">
+                            Off by default. Opt-in becomes available only when this APK proves its player, network source, resolver bridge, and foreground MediaSession are present. Opening Settings does not contact any music service.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!androidStreamingCapabilities?.ready}
+                          onClick={() => setAndroidOnlineOptIn((value) => !value)}
+                          className={`min-h-[44px] shrink-0 rounded-xl border px-4 text-xs font-black uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-40 ${
+                            androidOnlineEnabled
+                              ? 'border-[var(--color-neon-yellow)] bg-[var(--color-neon-yellow)] text-black'
+                              : 'border-white/15 bg-white/5 text-white'
+                          }`}
+                        >
+                          {androidOnlineEnabled
+                            ? 'Online enabled'
+                            : androidStreamingCapabilities?.ready
+                              ? 'Enable online'
+                              : 'Online unavailable'}
+                        </button>
+                      </div>
+
+                      {androidStreamingCapabilities ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {([
+                            ['Android runtime', androidStreamingCapabilities.platform],
+                            ['GStreamer', androidStreamingCapabilities.gstreamer],
+                            ['Playbin', androidStreamingCapabilities.playbin],
+                            ['HTTP source', androidStreamingCapabilities.networkSource],
+                            ['Resolver bridge', androidStreamingCapabilities.resolverBridge],
+                            ['Foreground MediaSession', androidStreamingCapabilities.foregroundMediaSession],
+                          ] as const).map(([label, status]) => (
+                            <div key={label} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                              <p className={`text-xs font-bold ${status.available ? 'text-emerald-300' : 'text-amber-300'}`}>
+                                {status.available ? 'Ready' : 'Unavailable'} · {label}
+                              </p>
+                              <p className="text-[11px] text-[var(--color-ink-muted)] mt-1 break-words">{status.detail}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-[var(--color-ink-muted)]">
+                          {androidCapabilitiesError || 'Checking installed Android components locally…'}
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={refreshAndroidStreamingCapabilities}
+                          className="min-h-[44px] rounded-xl border border-white/15 bg-white/5 px-4 text-xs font-bold text-white"
+                        >
+                          Recheck installed components
+                        </button>
+                        <button
+                          type="button"
+                          disabled={androidDiagnosticsRunning}
+                          onClick={() => void runAndroidStreamingDiagnostics()}
+                          className="min-h-[44px] rounded-xl border border-[var(--color-neon-yellow)]/40 bg-[var(--color-neon-yellow)]/10 px-4 text-xs font-bold text-[var(--color-neon-yellow)] disabled:opacity-40"
+                        >
+                          {androidDiagnosticsRunning ? 'Testing connectivity…' : 'Run connectivity smoke test'}
+                        </button>
+                      </div>
+
+                      {androidDiagnostics && (
+                        <div className="space-y-2">
+                          {([
+                            ['YouTube resolver', androidDiagnostics.youtube],
+                            ['SoundCloud', androidDiagnostics.soundcloud],
+                            ['Spotify → YouTube match', androidDiagnostics.spotifyMatch],
+                          ] as const).map(([label, result]) => (
+                            <div key={label} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                              <p className={`text-xs font-bold ${result.available ? 'text-emerald-300' : 'text-amber-300'}`}>
+                                {result.available ? 'Reachable' : 'Not confirmed'} · {label}
+                              </p>
+                              <p className="text-[11px] text-[var(--color-ink-muted)] mt-1 break-words">{result.detail}</p>
+                            </div>
+                          ))}
+                          <p className="text-[11px] text-[var(--color-ink-muted)]">{androidDiagnostics.note}</p>
+                        </div>
+                      )}
+
+                      <details className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3">
+                        <summary className="cursor-pointer text-xs font-bold text-white">Device validation checklist</summary>
+                        <ol className="mt-2 list-decimal space-y-1 pl-5 text-[11px] leading-relaxed text-[var(--color-ink-muted)]">
+                          <li>Install the arm64 APK and confirm every installed-component check is Ready.</li>
+                          <li>Run the smoke test on Wi-Fi and mobile data; compare each source separately.</li>
+                          <li>Enable online access, search Browse, and play one YouTube, SoundCloud, and Spotify-match result without autoplay from diagnostics.</li>
+                          <li>Queue a streamed track beside a local track; verify Next/Previous, artwork, lyrics, and errors use the same player.</li>
+                          <li>Lock the screen and verify MediaStyle title, artwork, pause, seek, and next controls.</li>
+                        </ol>
+                      </details>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {androidPermissions ? (
+                        ([['audio', androidPermissions.audio], ['notifications', androidPermissions.notifications]] as const).map(([kind, entry]) => (
+                          <div key={kind} className="rounded-2xl border border-white/10 bg-black/20 p-4 flex flex-col gap-3">
+                            <div className="min-w-0">
+                              <p className="font-bold text-white">{entry.label}</p>
+                              <p className="text-xs text-[var(--color-ink-muted)] mt-1 break-words">
+                                Android {androidPermissions.apiLevel} · {!entry.applicable ? 'No runtime permission needed' : entry.granted ? 'Allowed' : 'Not allowed'}
+                              </p>
+                            </div>
+                            {entry.applicable && !entry.granted && (
+                              <button
+                                type="button"
+                                disabled={permissionRequesting !== null}
+                                onClick={() => void requestAndroidPermission(kind)}
+                                className="min-h-[44px] rounded-xl border border-[var(--color-neon-yellow)]/40 bg-[var(--color-neon-yellow)]/10 px-4 text-sm font-bold text-[var(--color-neon-yellow)] disabled:opacity-40"
+                              >
+                                {permissionRequesting === kind ? 'Opening Android prompt…' : `Allow ${kind === 'audio' ? 'audio access' : 'notifications'}`}
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-[var(--color-ink-muted)]">Checking Android permissions…</p>
+                      )}
+                    </div>
+                    </>
+                  )}
+                  {runtimePlatform === 'windows' && (
+                    <SettingsToggle
+                      title="Windows taskbar progress"
+                      desc="Show playback progress with normal, paused, and error states"
+                      value={windowsTaskbarProgress}
+                      onChange={setWindowsTaskbarProgress}
+                    />
+                  )}
+                  {runtimePlatform === 'linux' && (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <p className="font-bold text-white">Linux media controls</p>
+                      <p className="text-xs text-[var(--color-ink-muted)] mt-1">
+                        Native MPRIS is unavailable in this build: adding a second media-control runtime would increase packaging and event-loop risk. NekoBeat uses the Web MediaSession integration exposed by the Linux WebView instead.
+                      </p>
+                    </div>
+                  )}
+                </section>
+              )}
 
               <UpdateSettingsCard
                 currentVersion={appVersion}
@@ -2739,6 +3745,153 @@ function App() {
 
               <section className="settings-card space-y-4">
                 <div>
+                  <h3 className="text-base sm:text-lg font-display font-bold text-white">Startup & queue</h3>
+                  <p className="text-sm text-[var(--color-ink-muted)] mt-1">
+                    Choose what is restored and how playing a list affects Up next.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <SettingsToggle
+                    title="Refresh library at startup"
+                    desc="Reindex configured folders once when NekoBeat opens"
+                    value={refreshAtStartup}
+                    onChange={setRefreshAtStartup}
+                  />
+                  <SettingsToggle
+                    title="Restore playback"
+                    desc="Restore the previous queue, track, and position without autoplay"
+                    value={playbackRestore}
+                    onChange={setPlaybackRestore}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-[var(--color-ink-faint)]">When playing a list</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['replace', 'append'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setPlaylistQueueMode(mode)}
+                        className={`min-h-[44px] rounded-xl border px-4 text-xs font-bold capitalize ${
+                          playlistQueueMode === mode
+                            ? 'bg-[var(--color-neon-yellow)] text-black border-[var(--color-neon-yellow)]'
+                            : 'bg-white/5 text-white/70 border-white/10'
+                        }`}
+                      >
+                        {mode} queue
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-[var(--color-ink-muted)]">
+                    Append keeps the current track playing and adds new, non-duplicate tracks to the end.
+                  </p>
+                </div>
+              </section>
+
+              <section className="settings-card space-y-4">
+                <div>
+                  <h3 className="text-base sm:text-lg font-display font-bold text-white">Now playing & lyrics</h3>
+                  <p className="text-sm text-[var(--color-ink-muted)] mt-1">
+                    Harmonoid-inspired options, tuned for NekoBeat neon.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <SettingsToggle
+                    title="Display audio format"
+                    desc="Show FLAC / kbps / sample rate on library and player"
+                    value={showAudioFormat}
+                    onChange={setShowAudioFormat}
+                  />
+                  <SettingsToggle
+                    title="Open now playing on play"
+                    desc="Expand the player when a new track starts"
+                    value={expandOnPlay}
+                    onChange={setExpandOnPlay}
+                  />
+                  <SettingsToggle
+                    title="Fallback covers"
+                    desc="Look up artwork online when a file has none"
+                    value={coverFallback}
+                    onChange={setCoverFallback}
+                  />
+                  <SettingsToggle
+                    title="Sidecar lyrics (.lrc)"
+                    desc="Prefer lyrics files next to audio when scanning"
+                    value={lrcFromDirectory}
+                    onChange={setLrcFromDirectory}
+                  />
+                  {isAndroidOs && (
+                    <SettingsToggle
+                      title="Notification lyrics"
+                      desc="Show the current lyric line in a notification"
+                      value={notificationLyrics}
+                      onChange={setNotificationLyrics}
+                    />
+                  )}
+                </div>
+                <div className="space-y-2 pt-1">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-[var(--color-ink-faint)]">Lyrics alignment</p>
+                  <div className="flex gap-2">
+                    {(['left', 'center', 'right'] as const).map((a) => (
+                      <button
+                        key={a}
+                        type="button"
+                        onClick={() => setLyricsAlign(a)}
+                        className={`px-4 py-2.5 rounded-xl text-xs font-bold capitalize border min-h-[44px] ${
+                          lyricsAlign === a
+                            ? 'bg-[var(--color-neon-yellow)] text-black border-[var(--color-neon-yellow)]'
+                            : 'bg-white/5 text-white/70 border-white/10'
+                        }`}
+                      >
+                        {a}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-[var(--color-ink-faint)]">Lyrics size</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['small', 'medium', 'large'] as const).map((size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => setLyricsSize(size)}
+                          className={`min-h-[44px] rounded-xl border px-2 text-xs font-bold capitalize ${
+                            lyricsSize === size
+                              ? 'bg-[var(--color-neon-yellow)] text-black border-[var(--color-neon-yellow)]'
+                              : 'bg-white/5 text-white/70 border-white/10'
+                          }`}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-[var(--color-ink-faint)]">Animation intensity</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['off', 'reduced', 'full'] as const).map((intensity) => (
+                        <button
+                          key={intensity}
+                          type="button"
+                          onClick={() => setAnimationIntensity(intensity)}
+                          className={`min-h-[44px] rounded-xl border px-2 text-xs font-bold capitalize ${
+                            animationIntensity === intensity
+                              ? 'bg-[var(--color-neon-yellow)] text-black border-[var(--color-neon-yellow)]'
+                              : 'bg-white/5 text-white/70 border-white/10'
+                          }`}
+                        >
+                          {intensity}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-card space-y-4">
+                <div>
                   <h3 className="text-base sm:text-lg font-display font-bold text-white">Local library</h3>
                   <p className="text-sm text-[var(--color-ink-muted)] mt-1">
                     Songs added from folders on this device. Does not delete files on disk or Liked Songs.
@@ -2747,7 +3900,9 @@ function App() {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl border border-white/10 bg-black/20">
                   <div className="min-w-0">
                     <p className="font-bold text-white">{tracks.length} track{tracks.length === 1 ? '' : 's'} in library</p>
-                    <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">Reset clears the library index so you can re-scan folders.</p>
+                    <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
+                      {new Set(tracks.map((t) => (t.artist || 'Unknown').trim())).size} artists · {new Set(tracks.map((t) => `${t.album}\0${t.artist}`)).size} albums. Reset clears the index only — files stay on disk.
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -2768,24 +3923,57 @@ function App() {
                     Reset library
                   </button>
                 </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={isScanning}
+                    onClick={() => void loadCachedTracks()}
+                    className="min-h-[44px] rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-bold text-white disabled:opacity-40"
+                  >
+                    Refresh library
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isScanning || tracks.length === 0}
+                    onClick={() => void reindexLibrary()}
+                    className="min-h-[44px] rounded-xl border border-[var(--color-neon-yellow)]/40 bg-[var(--color-neon-yellow)]/10 px-4 text-sm font-bold text-[var(--color-neon-yellow)] disabled:opacity-40"
+                  >
+                    {isScanning ? 'Reindexing…' : 'Reindex metadata'}
+                  </button>
+                </div>
+                <div className="space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <label className="flex flex-col gap-2 text-sm font-bold text-white sm:flex-row sm:items-center sm:justify-between">
+                    Minimum audio file size
+                    <select
+                      value={librarySettings.min_file_size_bytes}
+                      onChange={(event) => void setMinFileSize(Number(event.target.value))}
+                      className="min-h-11 rounded-xl border border-white/15 bg-zinc-900 px-3 text-sm text-white"
+                    >
+                      <option value={0}>No minimum</option>
+                      <option value={16 * 1024}>16 KB</option>
+                      <option value={64 * 1024}>64 KB</option>
+                      <option value={256 * 1024}>256 KB</option>
+                    </select>
+                  </label>
+                  <div>
+                    <p className="mb-2 text-xs font-black uppercase tracking-widest text-[var(--color-ink-faint)]">Indexed folders</p>
+                    {librarySettings.directories.length === 0 ? (
+                      <p className="text-xs text-[var(--color-ink-muted)]">Folders you add on desktop will appear here.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {librarySettings.directories.map((directory) => (
+                          <div key={directory} className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                            <span className="min-w-0 flex-1 truncate text-xs text-white/75" title={directory}>{directory}</span>
+                            <button type="button" onClick={() => void removeDirectory(directory)} className="rounded-lg p-2 text-red-300/70 hover:bg-red-500/10" aria-label={`Forget ${directory}`}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </section>
-            </motion.div>
-          ) : activeTab === 'listen' && isAndroidOs ? (
-            <motion.div
-              key="listen-android"
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: -20, opacity: 0 }}
-              className="max-w-lg mx-auto py-10"
-            >
-              <AndroidScopeBanner />
-              <button
-                type="button"
-                onClick={() => setActiveTab('library')}
-                className="mt-4 w-full min-h-[48px] rounded-2xl bg-[var(--color-neon-yellow)] text-black font-black"
-              >
-                Go to Library
-              </button>
             </motion.div>
           ) : (
             <MusicNews
@@ -2795,13 +3983,13 @@ function App() {
               viewMode={viewMode}
               setViewMode={setViewMode}
               recentPlays={recentPlays}
-              onQuickNav={(tab) => setActiveTab(isAndroidOs && tab === 'browse' ? 'library' : tab)}
+              onQuickNav={(tab) => setActiveTab(!androidOnlineEnabled && tab === 'browse' ? 'library' : tab)}
               onPlayRecent={(recent) => {
                 if (recent.filepath && (!recent.source || recent.source === 'local')) {
-                  playTrack(recent.filepath);
+                  void handlePlayLocalTrack(recent.filepath);
                   return;
                 }
-                if (isAndroidOs) {
+                if (!androidOnlineEnabled) {
                   setActiveTab('library');
                   return;
                 }
@@ -2818,7 +4006,7 @@ function App() {
                 }, 'liked');
               }}
               onSelect={(track) => {
-                if (isAndroidOs) {
+                if (!androidOnlineEnabled) {
                   setActiveTab('library');
                   return;
                 }
@@ -2867,12 +4055,23 @@ function App() {
               {playerTrack ? stripExtension(playerTrack.title) : "Nothing playing"}
             </span>
             <span className="text-[10px] sm:text-[11px] md:text-xs text-[var(--color-ink-muted)] truncate font-medium leading-snug">
-              {playerTrack ? playerTrack.artist : "Find a track on Listen or Browse"}
+              {nowPlayingLyric
+                ? nowPlayingLyric
+                : playerTrack
+                  ? (techLabel(playerTrack)
+                    ? `${playerTrack.artist} · ${techLabel(playerTrack)}`
+                    : playerTrack.artist)
+                  : "Find a track on Listen or Browse"}
             </span>
           </div>
-          {playerTrack?.source && (
+          {playerTrack?.source && playerTrack.source !== 'local' && (
             <span className="hidden md:inline-flex text-[9px] font-black uppercase tracking-wider text-black bg-[var(--color-neon-yellow)] px-1.5 py-0.5 rounded-md shrink-0">
               {hifiReadyIds[playerTrack.id || ''] ? 'HiFi' : playerTrack.source === 'soundcloud' ? 'SC' : playerTrack.source === 'spotify' ? 'SP' : playerTrack.source === 'youtube' ? 'YT' : playerTrack.source}
+            </span>
+          )}
+          {showAudioFormat && playerTrack?.source === 'local' && (playerTrack as any).format && (
+            <span className="hidden md:inline-flex text-[9px] font-black uppercase tracking-wider text-black bg-[var(--color-neon-yellow)] px-1.5 py-0.5 rounded-md shrink-0">
+              {(playerTrack as any).format}
             </span>
           )}
           {playerTrack && (
@@ -2904,8 +4103,8 @@ function App() {
             </button>
             <button
               type="button"
-              onClick={togglePause}
-              disabled={!currentTrackPath}
+              onClick={handleTogglePlayback}
+              disabled={!playerTrack}
               aria-label={isPlaying ? "Pause" : "Play"}
               aria-pressed={isPlaying}
               className={`w-10 h-10 lg:w-11 lg:h-11 rounded-full flex items-center justify-center transition-all shadow-lg shrink-0
@@ -3001,8 +4200,8 @@ function App() {
           </button>
           <button
             type="button"
-            onClick={togglePause}
-            disabled={!currentTrackPath}
+            onClick={handleTogglePlayback}
+            disabled={!playerTrack}
             aria-label={isPlaying ? "Pause" : "Play"}
             aria-pressed={isPlaying}
             className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0
@@ -3040,13 +4239,17 @@ function App() {
           const loopedRows = upcomingRows.filter((r) => r.looped);
           const nowPlaying = playQueue.current;
 
-          const playQueueRow = (t: QueueTrack) => {
-            playQueue.setCurrentIndex(playQueue.queue.findIndex((q) => q.id === t.id));
-            handleStreamExternalAudio(
-              { ...t, stream_url: t.stream_url || getTrackPlaybackUrl(t) },
-              t.playbackContext === 'liked' ? 'liked' : 'search',
-              { skipQueueRebuild: true },
-            );
+          const playQueueRow = (t: QueueTrack, queueIndex: number) => {
+            playQueue.setCurrentIndex(queueIndex);
+            if (isLocalQueueTrack(t)) {
+              void handlePlayLocalTrack(t.stream_url || t.id, { rebuildQueue: false });
+            } else {
+              handleStreamExternalAudio(
+                { ...t, stream_url: t.stream_url || getTrackPlaybackUrl(t) },
+                t.playbackContext === 'liked' ? 'liked' : 'search',
+                { skipQueueRebuild: true },
+              );
+            }
             setCoverArt(t.artwork_url);
             playQueue.setShowQueue(false);
           };
@@ -3095,7 +4298,7 @@ function App() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => playQueueRow(t)}
+                  onClick={() => playQueueRow(t, queueIndex)}
                   className="flex items-center gap-2.5 min-w-0 flex-1 text-left rounded-lg py-1 pr-1"
                 >
                   <img src={t.artwork_url || logoImg} alt="" className="w-10 h-10 rounded-md object-cover bg-zinc-800 shrink-0" />
@@ -3126,6 +4329,17 @@ function App() {
                     <ArrowDown size={12} />
                   </button>
                 </div>
+                {!looped && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${t.title} from queue`}
+                    title="Remove from queue"
+                    onClick={() => playQueue.removeAt(queueIndex)}
+                    className="p-2 text-neutral-500 hover:text-red-300 rounded-lg hover:bg-red-500/10 shrink-0"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             );
           };
@@ -3165,13 +4379,33 @@ function App() {
                     </p>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => playQueue.setShowQueue(false)}
-                  className="text-[var(--color-ink-faint)] hover:text-white text-xs font-bold min-h-[36px] px-2 shrink-0"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={playQueue.shuffle}
+                    disabled={playQueue.queue.length < 2}
+                    aria-label="Shuffle upcoming queue"
+                    title="Shuffle upcoming"
+                    className={`p-2 rounded-lg disabled:opacity-30 ${playQueue.shuffleEnabled ? 'text-[var(--color-neon-yellow)] bg-white/10' : 'text-neutral-400 hover:text-white hover:bg-white/10'}`}
+                  >
+                    <Shuffle size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={playQueue.clear}
+                    disabled={playQueue.queue.length === 0}
+                    className="text-neutral-400 hover:text-red-300 text-xs font-bold min-h-[36px] px-2 rounded-lg hover:bg-red-500/10 disabled:opacity-30"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => playQueue.setShowQueue(false)}
+                    className="text-[var(--color-ink-faint)] hover:text-white text-xs font-bold min-h-[36px] px-2"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
               <div className="overflow-y-auto flex-1 p-2 space-y-1">
                 {nowPlaying && (
@@ -3368,6 +4602,16 @@ function App() {
                       >
                         {playerTrack.artist}
                       </button>
+                      {techLabel(playerTrack) && (
+                        <p className="text-[10px] sm:text-[11px] text-white/45 font-mono tracking-wide mt-1.5 truncate">
+                          {techLabel(playerTrack)}
+                        </p>
+                      )}
+                      {nowPlayingLyric && (
+                        <p className="text-[11px] sm:text-xs text-white/70 mt-2 line-clamp-2 font-lyrics leading-snug">
+                          {nowPlayingLyric}
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -3392,8 +4636,8 @@ function App() {
                       <button type="button" onClick={handlePrevTrack} disabled={!currentTrackPath} aria-label="Previous" className="text-white/60 hover:text-white transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded-md p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"><SkipBack size={22} className="md:w-6 md:h-6" fill="currentColor" /></button>
                       <button
                         type="button"
-                        onClick={togglePause}
-                        disabled={!currentTrackPath}
+                        onClick={handleTogglePlayback}
+                        disabled={!playerTrack}
                         aria-label={isPlaying ? "Pause" : "Play"}
                         aria-pressed={isPlaying}
                         className={`w-14 h-14 sm:w-14 sm:h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center transition-all shadow-lg shrink-0
@@ -3425,6 +4669,10 @@ function App() {
                   lyricsOffsetMs={lyricsOffsetMs}
                   onOffsetChange={handleLyricsOffsetChange}
                   onUploadLyrics={handleUploadLyrics}
+                  onActiveLineChange={handleActiveLyricLine}
+                  align={lyricsAlign}
+                  size={lyricsSize}
+                  lyricsSource={lyricsData?.source}
                 />
               </div>
               </div>
@@ -3515,8 +4763,27 @@ function HeroSearch({ value, onChange, isSearching, source, onSourceChange, acti
 }
 
 
-function TrackResult({ track, onPlay, currentTrackId, isCurrentlyPlaying }: { track: AggregatedTrack; onPlay: (track: AggregatedTrack) => void; currentTrackId: string | null; isCurrentlyPlaying: boolean }) {
+function TrackResult({
+  track,
+  onPlay,
+  currentTrackId,
+  isCurrentlyPlaying,
+  showFormat = true,
+  onArtistClick,
+  onPlayNext,
+  onAddQueue,
+}: {
+  track: AggregatedTrack;
+  onPlay: (track: AggregatedTrack) => void;
+  currentTrackId: string | null;
+  isCurrentlyPlaying: boolean;
+  showFormat?: boolean;
+  onArtistClick?: () => void;
+  onPlayNext?: () => void;
+  onAddQueue?: () => void;
+}) {
   const isCurrentTrack = currentTrackId === track.id;
+  const tech = showFormat ? audioFormatLabel(track) : '';
 
   const handlePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -3529,47 +4796,83 @@ function TrackResult({ track, onPlay, currentTrackId, isCurrentlyPlaying }: { tr
     <motion.div
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
-      onClick={handlePlay}
-      className={`group flex items-center gap-4 p-3 rounded-2xl bg-zinc-900/20 hover:bg-white/5 border transition-all cursor-pointer relative
+      className={`group flex items-center gap-4 p-3 rounded-2xl bg-zinc-900/20 hover:bg-white/5 border transition-all relative
                   ${isCurrentTrack ? 'border-[var(--color-neon-yellow)]/50 bg-white/5' : 'border-transparent hover:border-white/10'}`}
     >
-      <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 relative bg-zinc-800">
+      <button
+        type="button"
+        onClick={handlePlay}
+        aria-label={`Play ${track.title} by ${track.artist}`}
+        className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 relative bg-zinc-800 text-left"
+      >
         <img src={track.artwork_url} className="w-full h-full object-cover" alt={track.title} />
         <div className={`absolute bottom-0 left-0 right-0 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-center ${
           track.source === 'youtube' ? 'bg-red-600/90 text-white' :
           track.source === 'soundcloud' ? 'bg-orange-500/90 text-white' :
           track.source === 'spotify' ? 'bg-green-600/90 text-white' :
+          track.source === 'local' ? 'bg-white/90 text-black' :
           'bg-white/20 text-white/80'
         }`}>
-          {track.source === 'youtube' ? 'YT' : track.source === 'soundcloud' ? 'SC' : track.source === 'spotify' ? 'SP' : track.source}
+          {track.source === 'youtube' ? 'YT' : track.source === 'soundcloud' ? 'SC' : track.source === 'spotify' ? 'SP' : track.source === 'local' ? (track.format || 'FILE') : track.source}
         </div>
-      </div>
-      <div className="flex-1 truncate">
-        <h4 className={`font-black truncate ${isCurrentTrack ? 'text-[var(--color-neon-yellow)]' : 'text-white'}`}>{stripExtension(track.title)}</h4>
-        <div className="flex items-center gap-2">
-          <p className="text-xs text-white/50 tracking-wide font-medium truncate">{track.artist}</p>
-          <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
-            track.source === 'youtube' ? 'bg-red-600/20 text-red-400' :
-            track.source === 'soundcloud' ? 'bg-orange-500/20 text-orange-400' :
-            track.source === 'spotify' ? 'bg-green-600/20 text-green-400' :
-            'bg-white/10 text-white/40'
-          }`}>
-            {track.source === 'youtube' ? 'YouTube' : track.source === 'soundcloud' ? 'SoundCloud' : track.source === 'spotify' ? 'Spotify' : track.source}
-          </span>
+      </button>
+      <div className="flex-1 truncate min-w-0">
+        <button type="button" onClick={handlePlay} className="block max-w-full text-left">
+          <h4 className={`font-black truncate ${isCurrentTrack ? 'text-[var(--color-neon-yellow)]' : 'text-white'}`}>{stripExtension(track.title)}</h4>
+        </button>
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            className="text-xs text-white/50 tracking-wide font-medium truncate hover:text-[var(--color-neon-yellow)]"
+            onClick={(e) => { if (onArtistClick) { e.stopPropagation(); onArtistClick(); } }}
+          >{track.artist}</button>
+          {track.source !== 'local' && (
+            <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+              track.source === 'youtube' ? 'bg-red-600/20 text-red-400' :
+              track.source === 'soundcloud' ? 'bg-orange-500/20 text-orange-400' :
+              track.source === 'spotify' ? 'bg-green-600/20 text-green-400' :
+              'bg-white/10 text-white/40'
+            }`}>
+              {track.source === 'youtube' ? 'YouTube' : track.source === 'soundcloud' ? 'SoundCloud' : track.source === 'spotify' ? 'Spotify' : track.source}
+            </span>
+          )}
         </div>
+        {tech && (
+          <p className="text-[10px] text-white/35 font-mono tracking-wide mt-0.5 truncate">{tech}</p>
+        )}
       </div>
 
       {/* Hover Actions */}
-      <div className="absolute right-3 inset-y-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute right-3 inset-y-0 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-zinc-950 via-zinc-950/95 to-transparent pl-8">
         <button
+          type="button"
           onClick={handlePlay}
-          className="bg-[var(--color-neon-yellow)] text-black font-bold px-4 py-2 rounded-xl text-sm shadow-lg hover:scale-105 active:scale-95 transition-all text-sm"
+          className="bg-[var(--color-neon-yellow)] text-black font-bold px-3 py-2 rounded-xl text-sm shadow-lg hover:scale-105 active:scale-95 transition-all"
         >
           {isCurrentTrack && isCurrentlyPlaying ? 'Playing' : 'Play'}
         </button>
-        <button className="p-2 backdrop-blur-md bg-white/10 rounded-xl border border-white/20 hover:bg-white/20 transition-all">
-          <ListMusic size={18} />
-        </button>
+        {onPlayNext && (
+          <button
+            type="button"
+            onClick={onPlayNext}
+            aria-label={`Play ${track.title} next`}
+            title="Play next"
+            className="p-2 backdrop-blur-md bg-white/10 rounded-xl border border-white/20 hover:bg-white/20 transition-all"
+          >
+            <SkipForward size={17} />
+          </button>
+        )}
+        {onAddQueue && (
+          <button
+            type="button"
+            onClick={onAddQueue}
+            aria-label={`Add ${track.title} to queue`}
+            title="Add to queue"
+            className="p-2 backdrop-blur-md bg-white/10 rounded-xl border border-white/20 hover:bg-white/20 transition-all"
+          >
+            <ListMusic size={17} />
+          </button>
+        )}
       </div>
     </motion.div>
   );
@@ -3587,39 +4890,53 @@ function SkeletonTrack() {
   );
 }
 
-function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, source, onArtResolved }: { index: number; title: string; artist: string; onClick: () => void; isPlaying: boolean; artworkUrl?: string; source?: string; onArtResolved?: (url: string) => void }) {
-  const [imgUrl, setImgUrl] = useState(artworkUrl || placeholderArt(title));
+function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, source, formatLabel, coverFallback = true, onArtResolved, onArtistClick }: { index: number; title: string; artist: string; onClick: () => void; isPlaying: boolean; artworkUrl?: string; source?: string; formatLabel?: string; coverFallback?: boolean; onArtResolved?: (url: string) => void; onArtistClick?: () => void }) {
+  const displayArt = toDisplayArtUrl(artworkUrl) || artworkUrl || placeholderArt(title);
+  const [imgUrl, setImgUrl] = useState(displayArt);
   const failedRef = useRef(false);
 
   useEffect(() => {
     failedRef.current = false;
-    if (artworkUrl && isRealArtworkUrl(artworkUrl)) {
-      setImgUrl(artworkUrl);
+    const next = toDisplayArtUrl(artworkUrl) || artworkUrl;
+    if (next && isRealArtworkUrl(artworkUrl)) {
+      setImgUrl(next);
       return;
     }
-    if (artworkUrl) {
-      setImgUrl(artworkUrl);
-    }
+    if (next) setImgUrl(next);
+    // Local files often already have Folder.jpg / embed — skip network unless missing
+    if (artworkUrl && isRealArtworkUrl(artworkUrl)) return;
+    if (!coverFallback) return;
     fetchAlbumArt(title, artist).then((url) => {
       if (url && !failedRef.current) {
         setImgUrl(url);
         if (!artworkUrl || !isRealArtworkUrl(artworkUrl)) onArtResolved?.(url);
       }
     });
-  }, [title, artist, artworkUrl, onArtResolved]);
+  }, [title, artist, artworkUrl, onArtResolved, coverFallback]);
 
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ delay: Math.min(index * 0.02, 0.5), type: "spring", stiffness: 300, damping: 25 }}
-      whileHover={{ y: -6 }}
+      layout
+      initial={{ opacity: 0, y: 16, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{
+        delay: Math.min(index * 0.03, 0.45),
+        type: 'spring',
+        stiffness: 380,
+        damping: 28,
+      }}
+      whileHover={{ y: -8, scale: 1.02 }}
+      whileTap={{ scale: 0.97 }}
       onClick={onClick}
       className="group cursor-pointer flex flex-col gap-2 md:gap-3 min-w-0"
     >
-      <div className={`aspect-square rounded-xl md:rounded-xl bg-zinc-800/30 overflow-hidden relative border border-white/10 transition-all duration-300 shadow-[0_15px_35px_rgba(0,0,0,0.4)] group-hover:shadow-[0_25px_50px_rgba(0,0,0,0.6)] group-hover:border-white/20`}>
-        <img
+      <div className={`aspect-square rounded-xl md:rounded-2xl bg-zinc-800/30 overflow-hidden relative border border-white/10 transition-shadow duration-300 shadow-[0_15px_35px_rgba(0,0,0,0.4)] group-hover:shadow-[0_25px_50px_rgba(0,0,0,0.55)] group-hover:border-[var(--color-neon-yellow)]/30`}>
+        <motion.img
+          key={imgUrl}
           src={imgUrl}
+          initial={{ scale: 1.06, opacity: 0.7 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
           className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out"
           alt=""
           onError={() => {
@@ -3633,7 +4950,7 @@ function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, sourc
             });
           }}
         />
-        {source && (
+        {source && source !== 'local' && (
           <div className={`absolute top-1.5 right-1.5 md:top-2 md:right-2 px-1.5 md:px-2 py-0.5 rounded-md md:rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wide shadow-lg ${
             source === 'youtube' ? 'bg-[var(--color-src-youtube)] text-white' :
             source === 'soundcloud' ? 'bg-[var(--color-src-soundcloud)] text-white' :
@@ -3643,8 +4960,18 @@ function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, sourc
             {source === 'youtube' ? 'YT' : source === 'soundcloud' ? 'SC' : source === 'spotify' ? 'SP' : source}
           </div>
         )}
-        <div className={`absolute inset-0 bg-[#09090b]/40 md:bg-[#09090b]/50 transition-opacity flex items-center justify-center backdrop-blur-[2px] ${isPlaying ? 'opacity-100' : 'opacity-100 md:opacity-0 md:group-hover:opacity-100'}`}>
-          <div className="w-11 h-11 md:w-14 md:h-14 bg-[var(--color-neon-yellow)] shadow-[0_0_20px_rgba(219,255,0,0.5)] rounded-full flex items-center justify-center border border-white/20">
+        {source === 'local' && formatLabel && (
+          <div className="absolute top-1.5 left-1.5 md:top-2 md:left-2 max-w-[85%] px-1.5 md:px-2 py-0.5 rounded-md md:rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wide shadow-lg bg-black/65 text-[var(--color-neon-yellow)] border border-white/10 truncate">
+            {formatLabel.split(' • ')[0]}
+          </div>
+        )}
+        <div className={`absolute inset-0 bg-[#09090b]/35 md:bg-[#09090b]/45 transition-opacity flex items-center justify-center backdrop-blur-[1px] ${isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-active:opacity-100'}`}>
+          <motion.div
+            layout
+            className="w-12 h-12 md:w-14 md:h-14 bg-[var(--color-neon-yellow)] shadow-[0_0_24px_rgba(219,255,0,0.55)] rounded-full flex items-center justify-center border border-white/20"
+            animate={isPlaying ? { scale: [1, 1.06, 1] } : { scale: 1 }}
+            transition={isPlaying ? { repeat: Infinity, duration: 1.2, ease: 'easeInOut' } : {}}
+          >
             {isPlaying ? (
               <div className="flex gap-1 items-center justify-center h-5">
                 <div className="w-1 h-3 bg-black animate-pulse" style={{ animationDelay: '0ms' }} />
@@ -3652,14 +4979,20 @@ function AlbumCard({ index, title, artist, onClick, isPlaying, artworkUrl, sourc
                 <div className="w-1 h-2 bg-black animate-pulse" style={{ animationDelay: '300ms' }} />
               </div>
             ) : (
-              <Play size={20} fill="black" className="text-black ml-0.5 md:ml-1 md:w-6 md:h-6" />
+              <Play size={22} fill="black" className="text-black ml-0.5 md:ml-1" />
             )}
-          </div>
+          </motion.div>
         </div>
       </div>
       <div className="min-w-0 px-0.5">
-        <h3 className={`font-display font-bold tracking-tight line-clamp-2 text-[13px] sm:text-base md:text-lg text-white leading-snug ${isPlaying ? 'drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]' : ''}`}>{title}</h3>
-        <p className="text-[11px] md:text-sm text-neutral-400 truncate font-sans mt-0.5">{artist}</p>
+        <h3 className={`font-display font-bold tracking-tight line-clamp-2 text-[13px] sm:text-base md:text-lg text-white leading-snug ${isPlaying ? 'text-[var(--color-neon-yellow)]' : ''}`}>{stripExtension(title)}</h3>
+        <p
+          className="text-[11px] md:text-sm text-neutral-400 truncate font-sans mt-0.5 hover:text-[var(--color-neon-yellow)]"
+          onClick={(e) => { if (onArtistClick) { e.stopPropagation(); onArtistClick(); } }}
+        >{artist}</p>
+        {formatLabel && (
+          <p className="text-[10px] text-white/35 font-mono tracking-wide mt-0.5 truncate">{formatLabel}</p>
+        )}
       </div>
     </motion.div>
   );

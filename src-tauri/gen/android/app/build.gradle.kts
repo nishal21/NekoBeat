@@ -68,13 +68,10 @@ android {
             )
         }
     }
-    signingConfigs {
-        create("release") {
-            val keystorePropertiesFile = rootProject.file("keystore.properties")
+    val keystorePropertiesFile = rootProject.file("keystore.properties")
+    val releaseSigningConfig = if (keystorePropertiesFile.exists()) {
+        signingConfigs.create("release") {
             val keystoreProperties = Properties()
-            check(keystorePropertiesFile.exists()) {
-                "Missing keystore.properties — run scripts/ci-android-signing.sh first."
-            }
             keystoreProperties.load(FileInputStream(keystorePropertiesFile))
             keyAlias = keystoreProperties["keyAlias"] as String
             val pass = keystoreProperties["password"] as String
@@ -83,6 +80,14 @@ android {
             // storeFile is relative to this app module directory
             storeFile = file(keystoreProperties["storeFile"] as String)
         }
+    } else {
+        null
+    }
+    val releaseRequested = gradle.startParameter.taskNames.any {
+        it.contains("release", ignoreCase = true)
+    }
+    check(!releaseRequested || releaseSigningConfig != null) {
+        "Missing keystore.properties — run scripts/ci-android-signing.sh first."
     }
     buildTypes {
         getByName("debug") {
@@ -100,7 +105,7 @@ android {
         getByName("release") {
             // Sideload APKs: keep minify off until ProGuard keep rules are solid
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            releaseSigningConfig?.let { signingConfig = it }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
@@ -124,6 +129,7 @@ dependencies {
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.media:media:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     // SpotiFLAC-Mobile go_backend — isolated in :spotiflac via SpotiFlacService.
     if (enableGobackend) {

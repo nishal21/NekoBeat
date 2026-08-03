@@ -17,6 +17,12 @@ pub fn resolve_playable_local_path(path: &str) -> Result<PathBuf, String> {
         return Err("Empty file path".into());
     }
 
+    if trimmed.starts_with("content:") {
+        return Err(
+            "Android content:// URI — copy into app storage (Add songs / Scan) before play".into(),
+        );
+    }
+
     #[cfg(not(target_os = "windows"))]
     if looks_like_windows_path(trimmed) {
         return Err(format!(

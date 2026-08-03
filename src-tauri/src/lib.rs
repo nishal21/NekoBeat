@@ -10,6 +10,17 @@ pub mod sidecar_util;
 pub mod android_bin;
 pub mod gst_init;
 pub mod spotiflac_mobile;
+pub mod lyrics_cache;
+pub mod playback_state;
+pub mod playlists;
+#[cfg(target_os = "android")]
+pub mod android_content;
+#[cfg(target_os = "android")]
+pub mod lyrics_notification;
+#[cfg(target_os = "android")]
+pub mod android_playback;
+#[cfg(target_os = "windows")]
+pub mod windows_taskbar;
 
 #[cfg(not(mobile))]
 use tauri::{
@@ -97,8 +108,15 @@ pub fn run() {
             audio::prefetch_external_audio,
             audio::set_volume,
             audio::set_eq_band,
+            audio::set_playback_rate,
+            audio::set_replay_gain,
+            audio::get_playback_capabilities,
             aggregator::genius::get_genius_lyrics,
             aggregator::lyrics::get_lyrics,
+            lyrics_cache::save_lyrics_cache,
+            lyrics_cache::read_lyrics_cache,
+            playback_state::load_playback_state,
+            playback_state::save_playback_state,
             aggregator::musixmatch::get_musixmatch_lyrics,
             aggregator::spotify_lyrics::get_spotify_lyrics,
             aggregator::search::search_external,
@@ -108,7 +126,42 @@ pub fn run() {
             library::runtime_platform,
             library::get_cached_tracks,
             library::clear_library,
+            library::reindex_library,
             library::update_library_enrichment,
+            library::get_library_settings,
+            library::set_library_min_file_size,
+            library::remove_library_directory,
+            playlists::list_playlists,
+            playlists::create_playlist,
+            playlists::rename_playlist,
+            playlists::delete_playlist,
+            playlists::add_playlist_track,
+            playlists::remove_playlist_track,
+            playlists::reorder_playlist_track,
+            playlists::get_playlist_tracks,
+            playlists::append_history,
+            #[cfg(target_os = "android")]
+            lyrics_notification::update_lyrics_notification,
+            #[cfg(target_os = "android")]
+            lyrics_notification::clear_lyrics_notification_cmd,
+            #[cfg(target_os = "android")]
+            android_playback::start_android_playback_service,
+            #[cfg(target_os = "android")]
+            android_playback::update_android_playback_metadata,
+            #[cfg(target_os = "android")]
+            android_playback::update_android_playback_state,
+            #[cfg(target_os = "android")]
+            android_playback::stop_android_playback_service,
+            #[cfg(target_os = "android")]
+            android_playback::get_android_permission_status,
+            #[cfg(target_os = "android")]
+            android_playback::request_android_permission,
+            #[cfg(target_os = "android")]
+            android_playback::android_streaming_capabilities,
+            #[cfg(target_os = "android")]
+            android_playback::android_streaming_smoke_test,
+            #[cfg(target_os = "windows")]
+            windows_taskbar::set_windows_taskbar_progress,
             offline::toggle_like,
             offline::get_liked_tracks,
             news::get_music_news,

@@ -38,6 +38,24 @@ body {
   user-select: none;
 }
 
+/* User-selected motion level. OS reduced-motion remains authoritative below. */
+html[data-animation-intensity="reduced"] *,
+html[data-animation-intensity="reduced"] *::before,
+html[data-animation-intensity="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 120ms !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-animation-intensity="off"] *,
+html[data-animation-intensity="off"] *::before,
+html[data-animation-intensity="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
 /* Custom scrollbar for webkit (used in Tauri/WebView2) */
 ::-webkit-scrollbar {
   width: 8px;

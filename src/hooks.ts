@@ -1,6 +1,15 @@
 import { useState, useEffect, useRef, useSyncExternalStore, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import {
+    loadPlaybackRate,
+    loadReplayGainMode,
+    loadReplayGainPreamp,
+    savePlaybackRate,
+    saveReplayGainMode,
+    saveReplayGainPreamp,
+    type ReplayGainMode,
+} from './prefs';
 
 /** External store so position polls don't re-render the whole App tree. */
 type AudioClockSnapshot = { positionMs: number; durationMs: number };
@@ -253,7 +262,14 @@ export type LyricsData = {
     source?: string;
 };
 
-export async function fetchLyrics(title: string, artist: string, album: string, durationMs: number, spotifyId?: string): Promise<LyricsData | null> {
+export async function fetchLyrics(
+    title: string,
+    artist: string,
+    album: string,
+    durationMs: number,
+    spotifyId?: string,
+    opts?: { cacheKey?: string | null; filepath?: string | null; readSidecar?: boolean },
+): Promise<LyricsData | null> {
     try {
         const result = await invoke<{ synced_lyrics?: string; plain_lyrics?: string; source?: string }>('get_lyrics', {
             title,
@@ -261,6 +277,9 @@ export async function fetchLyrics(title: string, artist: string, album: string, 
             album,
             durationMs,
             spotifyId: spotifyId?.replace(/^sp-/, '') || null,
+            cacheKey: opts?.cacheKey || null,
+            filepath: opts?.filepath || null,
+            readSidecar: opts?.readSidecar ?? true,
         });
         if (result && (result.synced_lyrics || result.plain_lyrics)) {
             return {
@@ -324,6 +343,8 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
     const playTrack = async (path: string, trackId?: string) => {
         const epoch = ++playEpochRef.current;
         try {
+            setIsPlaying(false);
+            setIsBuffering(true);
             resetClock();
             if (trackId) {
                 currentExternalTrackIdRef.current = trackId;
@@ -340,7 +361,10 @@ export function useAudioPlayer(getTracks: () => TrackData[], onEnded?: () => voi
             needsRestreamRef.current = false;
         } catch (e) {
             if (epoch !== playEpochRef.current) return;
+            setIsPlaying(false);
+            setIsBuffering(false);
             console.error("Failed to play track:", e);
+            throw e; // callers that care (local library) can show a toast
         }
     };
 
@@ -753,10 +777,25 @@ export type AggregatedTrack = {
     title: string;
     artist: string;
     album: string;
+    album_artist?: string;
     duration_ms: number;
     artwork_url: string;
     source: string;
     stream_url?: string;
+    format?: string;
+    bitrate_kbps?: number;
+    sample_rate_hz?: number;
+    channels?: number;
+    local_lyrics?: string;
+    genre?: string;
+    track_number?: number;
+    disc_number?: number;
+    year?: number;
+    date_added?: number;
+    replaygain_track_gain?: number;
+    replaygain_track_peak?: number;
+    replaygain_album_gain?: number;
+    replaygain_album_peak?: number;
 };
 
 function interleaveSearchResults(yt: AggregatedTrack[], sc: AggregatedTrack[], sp: AggregatedTrack[]): AggregatedTrack[] {
@@ -950,11 +989,19 @@ export type QueueTrack = AggregatedTrack & {
 export function usePlayQueue() {
     const [queue, setQueue] = useState<QueueTrack[]>([]);
     const [currentIndex, setCurrentIndex] = useState(-1);
+    const [shuffleEnabled, setShuffleEnabled] = useState(false);
     const [showQueue, setShowQueue] = useState(false);
+    // Event handlers can fire more than once before React commits a render. Keep
+    // synchronous mirrors so rapid next/previous presses advance exactly once.
+    const queueRef = useRef<QueueTrack[]>([]);
+    const currentIndexRef = useRef(-1);
 
     const replaceQueue = useCallback((tracks: QueueTrack[], startIndex = 0) => {
+        const nextIndex = tracks.length === 0 ? -1 : Math.max(0, Math.min(startIndex, tracks.length - 1));
+        queueRef.current = tracks;
+        currentIndexRef.current = nextIndex;
         setQueue(tracks);
-        setCurrentIndex(tracks.length === 0 ? -1 : Math.max(0, Math.min(startIndex, tracks.length - 1)));
+        setCurrentIndex(nextIndex);
     }, []);
 
     const playFromList = useCallback((tracks: QueueTrack[], startId?: string) => {
@@ -966,21 +1013,105 @@ export function usePlayQueue() {
                 console.warn('playFromList: startId not in queue, starting at 0', startId);
             }
         }
+        const nextIndex = tracks.length === 0 ? -1 : idx;
+        queueRef.current = tracks;
+        currentIndexRef.current = nextIndex;
         setQueue(tracks);
-        setCurrentIndex(tracks.length === 0 ? -1 : idx);
+        setCurrentIndex(nextIndex);
         return tracks[idx] ?? null;
     }, []);
 
     const enqueue = useCallback((track: QueueTrack) => {
         setQueue((prev) => {
             if (prev.some((t) => t.id === track.id)) return prev;
-            return [...prev, track];
+            const next = [...prev, track];
+            queueRef.current = next;
+            return next;
         });
     }, []);
 
+    const appendQueue = useCallback((tracks: QueueTrack[]) => {
+        if (tracks.length === 0) return;
+        const existingIds = new Set(queueRef.current.map((track) => track.id));
+        const additions = tracks.filter((track) => {
+            if (existingIds.has(track.id)) return false;
+            existingIds.add(track.id);
+            return true;
+        });
+        if (additions.length === 0) return;
+        const next = [...queueRef.current, ...additions];
+        queueRef.current = next;
+        setQueue(next);
+    }, []);
+
+    const insertNext = useCallback((track: QueueTrack) => {
+        const prev = queueRef.current;
+        const ci = currentIndexRef.current;
+        const existing = prev.findIndex((item) => item.id === track.id);
+        let nextQueue = existing >= 0
+            ? prev.filter((_, index) => index !== existing)
+            : [...prev];
+        let nextIndex = ci;
+        if (existing >= 0 && existing < ci) nextIndex -= 1;
+        const insertAt = Math.min(Math.max(nextIndex + 1, 0), nextQueue.length);
+        nextQueue.splice(insertAt, 0, track);
+        queueRef.current = nextQueue;
+        currentIndexRef.current = nextIndex;
+        setQueue(nextQueue);
+        setCurrentIndex(nextIndex);
+    }, []);
+
+    const removeAt = useCallback((index: number) => {
+        const prev = queueRef.current;
+        if (index < 0 || index >= prev.length) return;
+        const nextQueue = prev.filter((_, itemIndex) => itemIndex !== index);
+        const ci = currentIndexRef.current;
+        let nextIndex = ci;
+        if (nextQueue.length === 0) nextIndex = -1;
+        else if (index < ci) nextIndex = ci - 1;
+        else if (index === ci) nextIndex = Math.min(ci, nextQueue.length - 1);
+        queueRef.current = nextQueue;
+        currentIndexRef.current = nextIndex;
+        setQueue(nextQueue);
+        setCurrentIndex(nextIndex);
+    }, []);
+
     const clearQueue = useCallback(() => {
+        queueRef.current = [];
+        currentIndexRef.current = -1;
         setQueue([]);
         setCurrentIndex(-1);
+        setShuffleEnabled(false);
+    }, []);
+
+    const shuffle = useCallback(() => {
+        const prev = queueRef.current;
+        const ci = currentIndexRef.current;
+        if (prev.length < 2) return;
+        // Keep the currently playing item and history stable; only randomize Up next.
+        const nextQueue = [...prev];
+        for (let i = nextQueue.length - 1; i > ci + 1; i -= 1) {
+            const j = ci + 1 + Math.floor(Math.random() * (i - ci));
+            [nextQueue[i], nextQueue[j]] = [nextQueue[j], nextQueue[i]];
+        }
+        queueRef.current = nextQueue;
+        setQueue(nextQueue);
+        setShuffleEnabled(true);
+    }, []);
+
+    const restoreQueue = useCallback((
+        tracks: QueueTrack[],
+        index: number,
+        restoredShuffleEnabled = false,
+    ) => {
+        const nextIndex = tracks.length === 0
+            ? -1
+            : Math.max(0, Math.min(index, tracks.length - 1));
+        queueRef.current = tracks;
+        currentIndexRef.current = nextIndex;
+        setQueue(tracks);
+        setCurrentIndex(nextIndex);
+        setShuffleEnabled(restoredShuffleEnabled);
     }, []);
 
     const peekNext = useCallback((loop = false): QueueTrack | null => {
@@ -996,49 +1127,63 @@ export function usePlayQueue() {
     }, [queue, currentIndex]);
 
     const advance = useCallback((loop = false): QueueTrack | null => {
-        if (queue.length === 0) return null;
-        let next = currentIndex + 1;
-        if (next >= queue.length) {
+        const currentQueue = queueRef.current;
+        if (currentQueue.length === 0) return null;
+        let next = currentIndexRef.current + 1;
+        if (next >= currentQueue.length) {
             if (!loop) return null;
             next = 0;
         }
+        currentIndexRef.current = next;
         setCurrentIndex(next);
-        return queue[next];
-    }, [queue, currentIndex]);
+        return currentQueue[next];
+    }, []);
 
     const retreat = useCallback((): QueueTrack | null => {
-        if (queue.length === 0 || currentIndex <= 0) return null;
-        const prev = currentIndex - 1;
+        const currentQueue = queueRef.current;
+        if (currentQueue.length === 0 || currentIndexRef.current <= 0) return null;
+        const prev = currentIndexRef.current - 1;
+        currentIndexRef.current = prev;
         setCurrentIndex(prev);
-        return queue[prev];
-    }, [queue, currentIndex]);
+        return currentQueue[prev];
+    }, []);
 
     /** Reorder by absolute queue indices; keeps current track identity. */
     const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
         if (fromIndex === toIndex) return;
-        setQueue((prev) => {
-            if (
-                fromIndex < 0 || toIndex < 0 ||
-                fromIndex >= prev.length || toIndex >= prev.length
-            ) return prev;
-            const next = [...prev];
-            const [item] = next.splice(fromIndex, 1);
-            next.splice(toIndex, 0, item);
-            return next;
-        });
-        setCurrentIndex((ci) => {
-            if (ci < 0) return ci;
-            if (fromIndex === ci) return toIndex;
-            if (fromIndex < ci && toIndex >= ci) return ci - 1;
-            if (fromIndex > ci && toIndex <= ci) return ci + 1;
-            return ci;
-        });
+        const prev = queueRef.current;
+        if (
+            fromIndex < 0 || toIndex < 0 ||
+            fromIndex >= prev.length || toIndex >= prev.length
+        ) return;
+        const nextQueue = [...prev];
+        const [item] = nextQueue.splice(fromIndex, 1);
+        nextQueue.splice(toIndex, 0, item);
+
+        const ci = currentIndexRef.current;
+        let nextIndex = ci;
+        if (fromIndex === ci) nextIndex = toIndex;
+        else if (fromIndex < ci && toIndex >= ci) nextIndex = ci - 1;
+        else if (fromIndex > ci && toIndex <= ci) nextIndex = ci + 1;
+
+        queueRef.current = nextQueue;
+        currentIndexRef.current = nextIndex;
+        setQueue(nextQueue);
+        setCurrentIndex(nextIndex);
     }, []);
 
     const moveQueueItem = useCallback((fromIndex: number, direction: -1 | 1) => {
         const toIndex = fromIndex + direction;
         reorderQueue(fromIndex, toIndex);
     }, [reorderQueue]);
+
+    const selectQueueIndex = useCallback((index: number) => {
+        const bounded = queueRef.current.length === 0
+            ? -1
+            : Math.max(0, Math.min(index, queueRef.current.length - 1));
+        currentIndexRef.current = bounded;
+        setCurrentIndex(bounded);
+    }, []);
 
     const current = currentIndex >= 0 ? queue[currentIndex] ?? null : null;
     const upNext = currentIndex >= 0 ? queue.slice(currentIndex + 1) : queue;
@@ -1068,20 +1213,27 @@ export function usePlayQueue() {
         currentIndex,
         current,
         upNext,
+        shuffleEnabled,
         getUpcoming,
         showQueue,
         setShowQueue,
         replaceQueue,
         playFromList,
         enqueue,
+        appendQueue,
+        insertNext,
+        removeAt,
+        clear: clearQueue,
         clearQueue,
+        shuffle,
+        restoreQueue,
         peekNext,
         peekPrev,
         advance,
         retreat,
         reorderQueue,
         moveQueueItem,
-        setCurrentIndex,
+        setCurrentIndex: selectQueueIndex,
     };
 }
 
@@ -1091,12 +1243,31 @@ export type TrackData = {
     title: string;
     artist: string;
     album: string;
+    album_artist?: string;
     duration_ms: number;
     artwork_url?: string;
     source?: string;
     stream_url?: string;
     local_audio_path?: string;
     local_lyrics?: string;
+    format?: string;
+    bitrate_kbps?: number;
+    sample_rate_hz?: number;
+    channels?: number;
+    genre?: string;
+    track_number?: number;
+    disc_number?: number;
+    year?: number;
+    date_added?: number;
+    replaygain_track_gain?: number;
+    replaygain_track_peak?: number;
+    replaygain_album_gain?: number;
+    replaygain_album_peak?: number;
+};
+
+export type LibrarySettings = {
+    directories: string[];
+    min_file_size_bytes: number;
 };
 
 function mergeLibraryTracks(prev: TrackData[], scanned: TrackData[]): TrackData[] {
@@ -1108,6 +1279,16 @@ function mergeLibraryTracks(prev: TrackData[], scanned: TrackData[]): TrackData[
 export function useLibrary() {
     const [tracks, setTracks] = useState<TrackData[]>([]);
     const [isScanning, setIsScanning] = useState(false);
+    const [settings, setSettings] = useState<LibrarySettings>({
+        directories: [],
+        min_file_size_bytes: 16 * 1024,
+    });
+
+    const loadLibrarySettings = async () => {
+        const next = await invoke<LibrarySettings>('get_library_settings');
+        setSettings(next);
+        return next;
+    };
 
     const loadCachedTracks = async () => {
         try {
@@ -1123,6 +1304,7 @@ export function useLibrary() {
         try {
             const scanned = await invoke<TrackData[]>('scan_directory', { path: directory });
             setTracks(prev => mergeLibraryTracks(prev, scanned));
+            await loadLibrarySettings();
         } catch (e) {
             console.error("Failed to scan directory:", e);
             throw e;
@@ -1172,6 +1354,27 @@ export function useLibrary() {
         }
     };
 
+    const reindexLibrary = async () => {
+        setIsScanning(true);
+        try {
+            const indexed = await invoke<TrackData[]>('reindex_library');
+            setTracks(indexed);
+            return indexed;
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    const setMinFileSize = async (minFileSizeBytes: number) => {
+        await invoke('set_library_min_file_size', { minFileSizeBytes });
+        await loadLibrarySettings();
+    };
+
+    const removeDirectory = async (path: string) => {
+        await invoke('remove_library_directory', { path });
+        await loadLibrarySettings();
+    };
+
     /** Merge cover / lyrics onto a library row (memory + SQLite). */
     const patchTrack = (
         filepath: string,
@@ -1197,6 +1400,7 @@ export function useLibrary() {
 
     useEffect(() => {
         loadCachedTracks();
+        loadLibrarySettings().catch((e) => console.warn('Failed to load library settings:', e));
     }, []);
 
     return {
@@ -1206,9 +1410,64 @@ export function useLibrary() {
         importAudioFiles,
         scanDeviceMusic,
         clearLibrary,
+        reindexLibrary,
         loadCachedTracks,
         patchTrack,
+        settings,
+        loadLibrarySettings,
+        setMinFileSize,
+        removeDirectory,
     };
+}
+
+export type PlaylistSummary = {
+    id: number;
+    name: string;
+    is_history: boolean;
+    track_count: number;
+};
+
+export function usePlaylists() {
+    const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
+
+    const refresh = useCallback(async () => {
+        const rows = await invoke<PlaylistSummary[]>('list_playlists');
+        setPlaylists(rows);
+        return rows;
+    }, []);
+
+    useEffect(() => {
+        refresh().catch((e) => console.error('Failed to load playlists:', e));
+    }, [refresh]);
+
+    const create = async (name: string) => {
+        const id = await invoke<number>('create_playlist', { name });
+        await refresh();
+        return id;
+    };
+    const rename = async (playlistId: number, name: string) => {
+        await invoke('rename_playlist', { playlistId, name });
+        await refresh();
+    };
+    const remove = async (playlistId: number) => {
+        await invoke('delete_playlist', { playlistId });
+        await refresh();
+    };
+    const addTrack = async (playlistId: number, filepath: string) => {
+        await invoke('add_playlist_track', { playlistId, filepath });
+        await refresh();
+    };
+    const removeTrack = async (playlistId: number, filepath: string) => {
+        await invoke('remove_playlist_track', { playlistId, filepath });
+        await refresh();
+    };
+    const reorderTrack = async (playlistId: number, fromIndex: number, toIndex: number) => {
+        await invoke('reorder_playlist_track', { playlistId, fromIndex, toIndex });
+    };
+    const getTracks = (playlistId: number) =>
+        invoke<TrackData[]>('get_playlist_tracks', { playlistId });
+
+    return { playlists, refresh, create, rename, remove, addTrack, removeTrack, reorderTrack, getTracks };
 }
 
 export type LikedTrack = {
@@ -1356,6 +1615,100 @@ export function useEqualizer() {
     }, []);
 
     return { gains, updateGain, resetGains, applyPreset };
+}
+
+export type PlaybackCapabilities = {
+    playback_rate: boolean;
+    min_playback_rate: number;
+    max_playback_rate: number;
+    replay_gain: boolean;
+    replay_gain_strategy: 'volume';
+    replay_gain_filter_available: boolean;
+    pitch: boolean;
+    pitch_element_available: boolean;
+    mobile_controls: boolean;
+};
+
+export function usePortablePlaybackControls(track: TrackData | null | undefined) {
+    const [capabilities, setCapabilities] = useState<PlaybackCapabilities | null>(null);
+    const [playbackRate, setPlaybackRateState] = useState(loadPlaybackRate);
+    const [replayGainMode, setReplayGainModeState] =
+        useState<ReplayGainMode>(loadReplayGainMode);
+    const [replayGainPreamp, setReplayGainPreampState] =
+        useState(loadReplayGainPreamp);
+
+    useEffect(() => {
+        let cancelled = false;
+        invoke<PlaybackCapabilities>('get_playback_capabilities')
+            .then(async (next) => {
+                if (cancelled) return;
+                setCapabilities(next);
+                if (next.playback_rate) {
+                    try {
+                        const applied = await invoke<number>('set_playback_rate', {
+                            rate: playbackRate,
+                        });
+                        if (!cancelled) setPlaybackRateState(applied);
+                    } catch (error) {
+                        console.warn('Failed to restore playback rate:', error);
+                    }
+                }
+            })
+            .catch((error) => console.warn('Playback capability query failed:', error));
+        return () => { cancelled = true; };
+    }, []);
+
+    useEffect(() => {
+        if (!capabilities?.replay_gain) return;
+        invoke('set_replay_gain', {
+            mode: replayGainMode,
+            preampDb: replayGainPreamp,
+            tags: {
+                track_gain_db: track?.replaygain_track_gain ?? null,
+                track_peak: track?.replaygain_track_peak ?? null,
+                album_gain_db: track?.replaygain_album_gain ?? null,
+                album_peak: track?.replaygain_album_peak ?? null,
+            },
+        }).catch((error) => console.warn('Failed to apply ReplayGain:', error));
+    }, [
+        capabilities?.replay_gain,
+        replayGainMode,
+        replayGainPreamp,
+        track?.id,
+        track?.filepath,
+        track?.replaygain_track_gain,
+        track?.replaygain_track_peak,
+        track?.replaygain_album_gain,
+        track?.replaygain_album_peak,
+    ]);
+
+    const setPlaybackRate = useCallback(async (value: number) => {
+        if (!capabilities?.playback_rate) return;
+        const applied = await invoke<number>('set_playback_rate', { rate: value });
+        setPlaybackRateState(applied);
+        savePlaybackRate(applied);
+    }, [capabilities?.playback_rate]);
+
+    const setReplayGainMode = useCallback((value: ReplayGainMode) => {
+        setReplayGainModeState(value);
+        saveReplayGainMode(value);
+    }, []);
+
+    const setReplayGainPreamp = useCallback((value: number) => {
+        const clamped = Math.max(-12, Math.min(12, value));
+        setReplayGainPreampState(clamped);
+        saveReplayGainPreamp(clamped);
+    }, []);
+
+    return {
+        capabilities,
+        playbackRate: capabilities?.playback_rate ? playbackRate : 1,
+        replayGainMode,
+        replayGainPreamp,
+        setPlaybackRate,
+        setReplayGainMode,
+        setReplayGainPreamp,
+    };
 }
 
 export const EQ_PRESETS = {

@@ -358,11 +358,15 @@ async fn fetch_and_store_liked_lyrics(app: &tauri::AppHandle, track: &LikedTrack
         None
     };
     match crate::aggregator::lyrics::get_lyrics(
+        app.clone(),
         track.title.clone(),
         track.artist.clone(),
         track.album.clone(),
         track.duration_ms,
         spotify_id,
+        Some(track.id.clone()),
+        track.local_audio_path.clone(),
+        Some(true),
     )
     .await
     {
@@ -859,6 +863,15 @@ pub async fn update_track_lyrics(app: tauri::AppHandle, track_id: String, filepa
         lyrics
     };
 
+    // Harmonoid-style: always mirror into Lyrics/<hash>.lrc
+    let cache_key = filepath
+        .clone()
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| track_id.clone());
+    if !cache_key.trim().is_empty() {
+        let _ = crate::lyrics_cache::write_cached(&app, &cache_key, &processed_lyrics);
+    }
+
     // 1. Local library row (SQLite) — Android content:// may not pass Path::exists
     if let Some(path) = filepath {
         if !path.trim().is_empty() {
@@ -888,6 +901,11 @@ pub async fn update_track_lyrics(app: tauri::AppHandle, track_id: String, filepa
             println!("Offline: Updated liked track lyrics for id {}", track_id);
             return Ok(());
         }
+    }
+
+    // Cache write alone is enough for browse/stream tracks
+    if !cache_key.trim().is_empty() {
+        return Ok(());
     }
 
     Err("Track not found in Library or Liked tracks".to_string())

@@ -127,7 +127,7 @@ Or grab a build from [Releases](https://github.com/nishal21/NekoBeat/releases/la
 
 - **macOS**: download from [Releases](https://github.com/nishal21/NekoBeat/releases/latest)
 - **Linux**: `.deb` / AppImage from Releases
-- **Android**: early library preview APK (local Library / Liked / Settings). Browse and streaming stay on desktop for now. 
+- **Android**: local Library, Liked, queue, lyrics, artwork, and MediaStyle controls are available. Online Listen/Browse remains off by default and can be enabled only when the installed APK passes its local streaming capability checks; Settings also provides an optional no-autoplay connectivity smoke test.
 
 ### Build from source
 
@@ -180,7 +180,7 @@ nekobeat/
 
 NekoBeat borrows ideas and patterns from these projects:
 
-- [Harmonoid](https://github.com/harmonoid/harmonoid) — Flutter music player; UI and local library ideas
+- [Harmonoid](https://github.com/harmonoid/harmonoid) — Inspiration for Flutter music player; UI and local library ideas
 - [Muffon](https://github.com/staniel359/muffon) — multi-source streaming client; aggregation shape
 - [Muffon API](https://github.com/staniel359/muffon-api) — backend patterns for multi-source search
 - [SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC) — Spotify → lossless download chain used in NekoBeat's Spotify path

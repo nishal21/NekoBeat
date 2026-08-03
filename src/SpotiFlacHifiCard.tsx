@@ -60,7 +60,7 @@ export function SpotiFlacHifiCard({ isAndroid }: Props) {
       <section className="settings-card space-y-2">
         <h3 className="text-base sm:text-lg font-display font-bold text-white">SpotiFLAC HiFi</h3>
         <p className="text-sm text-[var(--color-ink-muted)]">
-          On desktop, Spotify HiFi uses the SpotiFLAC CLI sidecar. Android uses an isolated Go worker (off in this build until stable).
+          Desktop Spotify HiFi uses the SpotiFLAC CLI sidecar. Android packages may include an isolated Go worker; Spotify search matching does not require HiFi credentials.
         </p>
       </section>
     );
