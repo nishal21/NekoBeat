@@ -144,30 +144,10 @@ fn init_unix() {
 /// Android: link `libgstreamer_android.so` via NDK (see docs/ANDROID_GSTREAMER.md).
 #[cfg(target_os = "android")]
 fn init_android() {
-  match gstreamer::init() {
-    Ok(_) => {
-      let probes = [
-        "playbin",
-        "openslessink",
-        "mpg123audiodec",
-        "faad",
-        "amcaudiodec",
-        "avdec_aac",
-        "flacdec",
-        "opusdec",
-        "vorbisdec",
-        "wavparse",
-        "qtdemux",
-      ];
-      let status: Vec<String> = probes
-        .iter()
-        .map(|n| format!("{}={}", n, gstreamer::ElementFactory::find(n).is_some()))
-        .collect();
-      eprintln!("GStreamer Android OK ({})", status.join(", "));
+    // MainActivity initializes the Android GStreamer runtime with a Context first. Avoid
+    // scanning/loading the full plugin registry during app startup; the audio worker performs
+    // concrete element creation lazily after the first explicit Play request.
+    if let Err(error) = gstreamer::init() {
+        eprintln!("GStreamer Android init failed: {error}");
     }
-    Err(e) => eprintln!(
-      "GStreamer Android init failed — set GSTREAMER_ROOT_ANDROID and NDK plugins: {}",
-      e
-    ),
-  }
 }

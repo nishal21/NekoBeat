@@ -908,9 +908,13 @@ pub fn set_replay_gain(
 
 #[tauri::command]
 pub fn get_playback_capabilities() -> PlaybackCapabilities {
+    #[cfg(target_os = "android")]
+    let (replay_gain_filter_available, pitch_element_available) = (false, false);
+    #[cfg(not(target_os = "android"))]
     let replay_gain_filter_available =
         gstreamer::ElementFactory::find("rgvolume").is_some()
             && gstreamer::ElementFactory::find("rglimiter").is_some();
+    #[cfg(not(target_os = "android"))]
     let pitch_element_available = gstreamer::ElementFactory::find("pitch").is_some()
         || gstreamer::ElementFactory::find("rubberband").is_some();
 
