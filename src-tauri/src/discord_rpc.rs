@@ -1,76 +1,109 @@
+//! Discord Rich Presence with rich media (Harmonoid-style).
+use crate::playback::TrackMeta;
+use crate::settings::AppSettings;
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DISCORD_APP_ID: &str = "1481006235192131744";
 
 pub struct DiscordState {
-    pub client: Arc<Mutex<Option<DiscordIpcClient>>>,
+    pub client: Mutex<Option<DiscordIpcClient>>,
+}
+
+impl Default for DiscordState {
+    fn default() -> Self {
+        Self {
+            client: Mutex::new(None),
+        }
+    }
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[tauri::command]
-pub fn set_discord_activity(
-    state: tauri::State<'_, DiscordState>,
-    title: String,
-    artist: String,
-    duration_ms: u64,
-    artwork_url: Option<String>,
+pub fn discord_update(
+    discord: tauri::State<'_, Arc<DiscordState>>,
+    settings: tauri::State<'_, Arc<Mutex<AppSettings>>>,
+    track: Option<TrackMeta>,
+    playing: bool,
+    position_ms: u64,
 ) -> Result<(), String> {
-    let mut client_guard = state.client.lock().unwrap();
+    if !settings.lock().discord_rich_presence {
+        return discord_clear(discord);
+    }
+    let Some(track) = track else {
+        return discord_clear(discord);
+    };
 
-    // Re-initialize if dropped or not connected
-    if client_guard.is_none() {
-        let mut new_client = DiscordIpcClient::new(DISCORD_APP_ID);
-        if new_client.connect().is_ok() {
-            *client_guard = Some(new_client);
+    let mut guard = discord.client.lock();
+    if guard.is_none() {
+        let mut client = DiscordIpcClient::new(DISCORD_APP_ID);
+        if client.connect().is_ok() {
+            *guard = Some(client);
         }
     }
+    let Some(client) = guard.as_mut() else {
+        return Ok(());
+    };
 
-    if let Some(client) = client_guard.as_mut() {
-        let details = format!("Listening to {}", title);
-        let state_str = format!("by {}", artist);
+    let details = track.title.chars().take(128).collect::<String>();
+    let state = track.artist.chars().take(128).collect::<String>();
+    let large_text = track
+        .album
+        .clone()
+        .unwrap_or_else(|| details.clone());
 
-        let mut assets = activity::Assets::new().large_text(&title);
+    let mut assets = activity::Assets::new()
+        .large_text(&large_text)
+        .small_text(if playing { "Playing" } else { "Paused" })
+        .small_image(if playing { "play" } else { "pause" });
 
-        // Use external artwork URL if provided, fallback to the generic asset name
-        if let Some(url) = artwork_url.as_deref().filter(|s| !s.is_empty()) {
-            assets = assets.large_image(url);
-        } else {
-            assets = assets.large_image("nekobeat_logo");
-        }
-
-        let mut payload = activity::Activity::new()
-            .details(&details)
-            .state(&state_str)
-            .assets(assets);
-
-        if duration_ms > 0 {
-            // Calculate end timestamp
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let end_timestamp = now + (duration_ms / 1000);
-            payload = payload.timestamps(activity::Timestamps::new().end(end_timestamp as i64));
-        }
-
-        if let Err(e) = client.set_activity(payload) {
-            eprintln!("Failed to set Discord activity: {}", e);
-            // Drop client on error so we can attempt to reconnect later
-            *client_guard = None;
-            return Err(e.to_string());
-        }
+    if let Some(url) = track
+        .cover_url
+        .as_deref()
+        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+    {
+        assets = assets.large_image(url);
     } else {
-        return Err("Discord RPC client not connected".to_string());
+        assets = assets.large_image("nekobeat_logo");
     }
 
+    let find_url = format!(
+        "https://www.google.com/search?q={}",
+        urlencoding::encode(&format!("{} {}", track.title, track.artist))
+    );
+
+    let act = activity::Activity::new()
+        .details(&details)
+        .state(&state)
+        .assets(assets);
+
+    // Button label+url must outlive set_activity call
+    let mut act = act.buttons(vec![activity::Button::new("Find", find_url.as_str())]);
+
+    if playing {
+        let start = now_secs() - (position_ms as i64 / 1000);
+        let end = start + (track.duration_ms.unwrap_or(position_ms) as i64 / 1000).max(1);
+        act = act.timestamps(activity::Timestamps::new().start(start).end(end));
+    }
+
+    client
+        .set_activity(act)
+        .map_err(|e| format!("discord set_activity: {e:?}"))?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_discord_activity(state: tauri::State<'_, DiscordState>) -> Result<(), String> {
-    let mut client_guard = state.client.lock().unwrap();
-    if let Some(client) = client_guard.as_mut() {
+pub fn discord_clear(discord: tauri::State<'_, Arc<DiscordState>>) -> Result<(), String> {
+    let mut guard = discord.client.lock();
+    if let Some(client) = guard.as_mut() {
         let _ = client.clear_activity();
     }
     Ok(())

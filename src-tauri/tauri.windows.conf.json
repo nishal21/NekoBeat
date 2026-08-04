@@ -5,7 +5,6 @@
       "binaries/spotiflac-cli"
     ],
     "resources": [
-      "gstreamer/**/*",
       "bin/yt-dlp.exe"
     ]
   }

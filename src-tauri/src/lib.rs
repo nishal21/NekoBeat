@@ -1,67 +1,39 @@
-pub mod aggregator;
-pub mod android_bin;
-#[cfg(target_os = "android")]
-pub mod android_content;
-#[cfg(target_os = "android")]
-pub mod android_playback;
-pub mod audio;
+//! NekoBeat greenfield backend — brand/id only from prior app.
+pub mod covers;
 pub mod discord_rpc;
-pub mod gst_init;
+pub mod extensions;
+pub mod hifi;
 pub mod library;
-pub mod lyrics_cache;
+pub mod lyrics;
 #[cfg(target_os = "android")]
 pub mod lyrics_notification;
-pub mod news;
-pub mod offline;
-pub mod path_util;
-pub mod playback_state;
-pub mod playlists;
-pub mod process_util;
-pub mod sidecar_util;
-pub mod spotiflac_mobile;
-#[cfg(target_os = "windows")]
-pub mod windows_taskbar;
+pub mod playback;
+pub mod settings;
+pub mod stream;
+pub mod zarz_api;
 
-#[cfg(not(mobile))]
-use std::sync::{Arc, Mutex};
-#[cfg(not(mobile))]
-use tauri::Emitter;
+use extensions::ExtState;
+use hifi::HifiState;
+use library::LibraryDb;
+use parking_lot::Mutex;
+use playback::shared_player;
+use std::sync::Arc;
+use stream::StreamState;
 use tauri::Manager;
-#[cfg(not(mobile))]
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    WindowEvent,
-};
-#[cfg(not(mobile))]
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[tauri::command]
-fn log_frontend(msg: String) {
-    println!("FRONTEND LOG: {}", msg);
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Tauri pulls reqwest 0.13 with rustls-no-provider. Without an installed
-    // CryptoProvider, Client::new() panics ("No provider set") during WebView
-    // request handling and aborts the Android process.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // `mut` only needed when desktop plugins are chained below.
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
-    // Must be registered first: second launch focuses the existing app (no duplicate process).
     #[cfg(not(mobile))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            focus_main_window(app);
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
         }));
     }
 
@@ -74,220 +46,78 @@ pub fn run() {
     {
         builder = builder
             .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_process::init());
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     }
 
-    let builder = builder
+    builder
         .setup(|app| {
-            #[cfg(not(target_os = "android"))]
-            {
-            gst_init::ensure_initialized();
-            android_bin::ensure_android_sidecars(app.handle());
-            }
-
-            let audio_state = audio::init_audio_thread(app.handle().clone());
-            app.manage(audio_state);
-
-            #[cfg(not(mobile))]
-            setup_desktop(app)?;
-
+            let data = app.path().app_data_dir().expect("app data dir");
+            std::fs::create_dir_all(&data).ok();
+            let settings = Arc::new(Mutex::new(settings::load(&data)));
+            let db = LibraryDb::open(&data).expect("library db");
+            let ext = Arc::new(ExtState {
+                registry_url: Mutex::new(settings.lock().extension_registry_url.clone()),
+                download_priority: Mutex::new(
+                    settings.lock().download_provider_priority.clone(),
+                ),
+                metadata_priority: Mutex::new(
+                    settings.lock().metadata_provider_priority.clone(),
+                ),
+                ..Default::default()
+            });
+            app.manage(shared_player());
+            app.manage(db);
+            app.manage(StreamState::default());
+            app.manage(Arc::new(HifiState::default()));
+            app.manage(ext);
+            app.manage(settings);
+            app.manage(Arc::new(discord_rpc::DiscordState::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
-            log_frontend,
-            spotiflac_mobile::spotiflac_mobile_download,
-            spotiflac_mobile::spotiflac_mobile_progress,
-            spotiflac_mobile::spotiflac_mobile_cancel,
-            spotiflac_mobile::spotiflac_mobile_install_extension,
-            spotiflac_mobile::spotiflac_mobile_bootstrap,
-            spotiflac_mobile::spotiflac_mobile_status,
-            audio::play_audio,
-            audio::pause_audio,
-            audio::resume_audio,
-            audio::seek_audio,
-            audio::get_audio_position,
-            audio::get_audio_duration,
-            audio::get_audio_clock,
-            audio::stream_external_audio,
-            audio::prefetch_external_audio,
-            audio::set_volume,
-            audio::set_eq_band,
-            audio::set_playback_rate,
-            audio::set_replay_gain,
-            audio::get_playback_capabilities,
-            aggregator::genius::get_genius_lyrics,
-            aggregator::lyrics::get_lyrics,
-            lyrics_cache::save_lyrics_cache,
-            lyrics_cache::read_lyrics_cache,
-            playback_state::load_playback_state,
-            playback_state::save_playback_state,
-            aggregator::musixmatch::get_musixmatch_lyrics,
-            aggregator::spotify_lyrics::get_spotify_lyrics,
-            aggregator::search::search_external,
-            library::scan_directory,
-            library::import_audio_files,
-            library::scan_device_music,
-            library::refresh_library,
-            library::runtime_platform,
-            library::get_cached_tracks,
-            library::clear_library,
-            library::reindex_library,
-            library::update_library_enrichment,
-            library::cache_remote_artwork,
-            library::artwork_as_data_url,
-            library::get_library_settings,
-            library::set_library_min_file_size,
-            library::remove_library_directory,
-            playlists::list_playlists,
-            playlists::create_playlist,
-            playlists::rename_playlist,
-            playlists::delete_playlist,
-            playlists::add_playlist_track,
-            playlists::remove_playlist_track,
-            playlists::reorder_playlist_track,
-            playlists::get_playlist_tracks,
-            playlists::append_history,
-            #[cfg(target_os = "android")]
-            lyrics_notification::update_lyrics_notification,
-            #[cfg(target_os = "android")]
-            lyrics_notification::set_lyrics_cues,
-            #[cfg(target_os = "android")]
-            lyrics_notification::clear_lyrics_notification_cmd,
-            #[cfg(target_os = "android")]
-            android_playback::update_android_playback_metadata,
-            #[cfg(target_os = "android")]
-            android_playback::update_android_playback_state,
-            #[cfg(target_os = "android")]
-            android_playback::stop_android_playback_service,
-            #[cfg(target_os = "android")]
-            android_playback::get_android_permission_status,
-            #[cfg(target_os = "android")]
-            android_playback::request_android_permission,
-            #[cfg(target_os = "android")]
-            android_playback::android_streaming_capabilities,
-            #[cfg(target_os = "android")]
-            android_playback::android_streaming_smoke_test,
-            #[cfg(target_os = "windows")]
-            windows_taskbar::set_windows_taskbar_progress,
-            offline::toggle_like,
-            offline::get_liked_tracks,
-            news::get_music_news,
-            offline::update_track_lyrics,
-            offline::read_text_file,
-            offline::convert_srt_vtt_to_lrc,
-            offline::check_liked_cache,
-            discord_rpc::set_discord_activity,
-            discord_rpc::clear_discord_activity,
-        ]);
-
-    #[cfg(not(mobile))]
-    {
-        builder
-            .on_window_event(|window, event| match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    window.hide().unwrap();
-                    api.prevent_close();
-                }
-                _ => {}
-            })
-            .build(tauri::generate_context!())
-            .expect("error while building tauri application")
-            .run(|app_handle, event| {
-                // macOS dock click while running (OS single-instance) — show again
-                #[cfg(target_os = "macos")]
-                if let tauri::RunEvent::Reopen {
-                    has_visible_windows,
-                    ..
-                } = event
-                {
-                    if !has_visible_windows {
-                        focus_main_window(app_handle);
-                    }
-                }
-                let _ = (app_handle, event);
-            });
-    }
-
-    #[cfg(mobile)]
-    {
-        builder
-            .run(tauri::generate_context!())
-            .expect("error while running tauri application");
-    }
-}
-
-#[cfg(not(mobile))]
-fn focus_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-}
-
-#[cfg(not(mobile))]
-fn setup_desktop(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    app.manage(discord_rpc::DiscordState {
-        client: Arc::new(Mutex::new(None)),
-    });
-
-    let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let show_i = MenuItem::with_id(app, "show", "Show NekoBeat", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
-
-    let _tray = TrayIconBuilder::new()
-        .menu(&menu)
-        .tooltip("NekoBeat")
-        .icon(app.default_window_icon().unwrap().clone())
-        .on_menu_event(|app: &tauri::AppHandle, event| match event.id.as_ref() {
-            "quit" => app.exit(0),
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-            _ => {}
-        })
-        .on_tray_icon_event(|tray: &tauri::tray::TrayIcon, event| match event {
-            TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } => {
-                let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-            _ => {}
-        })
-        .build(app)?;
-
-    let app_handle = app.handle().clone();
-    // Do NOT register MediaPlayPause here — WebView MediaSession already handles it.
-    // Registering both caused Resume → immediate Pause (shortcut toggled after SMTC play).
-    let next_track = Shortcut::new(Some(Modifiers::empty()), Code::MediaTrackNext);
-    let prev_track = Shortcut::new(Some(Modifiers::empty()), Code::MediaTrackPrevious);
-
-    app.handle().plugin(
-        tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(move |_app, shortcut, event| {
-                if event.state() == ShortcutState::Pressed {
-                    if shortcut == &next_track {
-                        let _ = app_handle.emit("shortcut-next", ());
-                    } else if shortcut == &prev_track {
-                        let _ = app_handle.emit("shortcut-prev", ());
-                    }
-                }
-            })
-            .build(),
-    )?;
-
-    let _ = app.handle().global_shortcut().register(next_track);
-    let _ = app.handle().global_shortcut().register(prev_track);
-
-    Ok(())
+            playback::playback_play,
+            playback::playback_pause,
+            playback::playback_resume,
+            playback::playback_stop,
+            playback::playback_seek,
+            playback::playback_set_volume,
+            playback::playback_status,
+            playback::playback_set_eq,
+            playback::playback_sleep_timer,
+            library::library_scan,
+            library::library_list,
+            library::library_like,
+            library::library_liked,
+            stream::stream_search,
+            stream::stream_resolve,
+            hifi::hifi_search,
+            hifi::hifi_enqueue,
+            hifi::hifi_jobs,
+            lyrics::lyrics_get,
+            lyrics::lyrics_notif_show,
+            lyrics::lyrics_notif_hide,
+            covers::cover_resolve,
+            extensions::extensions_list,
+            extensions::extensions_refresh,
+            extensions::extensions_install,
+            extensions::extensions_set_registry,
+            extensions::extensions_set_priority,
+            extensions::extensions_get_settings,
+            extensions::extensions_set_settings,
+            extensions::extensions_start_login,
+            extensions::extensions_complete_login,
+            extensions::extensions_logout,
+            extensions::extensions_pending_auth,
+            settings::settings_get,
+            settings::settings_set,
+            discord_rpc::discord_update,
+            discord_rpc::discord_clear,
+            zarz_api::zarz_resolve,
+            zarz_api::zarz_config,
+            zarz_api::zarz_docs_url,
+            zarz_api::zarz_health,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running NekoBeat");
 }

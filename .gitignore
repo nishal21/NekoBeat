@@ -39,10 +39,11 @@ release/
 *.sig
 *.nsis.zip
 
-# Local Windows GStreamer runtime (CI stages from MSI; do not commit ~300MB DLLs)
+# Legacy GStreamer paths (removed from product; keep ignored if leftovers appear)
 /src-tauri/gstreamer/
-# Never commit Windows GST into Android assets (accidental rename risk)
+/src-tauri/libs/
 src-tauri/gen/android/app/src/main/assets/gstreamer/
+src-tauri/android-gst/
 
 # yt-dlp binaries fetched in CI / locally
 /src-tauri/bin/yt-dlp

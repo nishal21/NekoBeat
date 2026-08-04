@@ -1,0 +1,238 @@
+.nb-mini {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "art meta controls"
+    "seek seek seek";
+  gap: 0.55rem 0.85rem;
+  align-items: center;
+  padding: 0.65rem 1rem;
+  background: color-mix(in oklch, var(--nb-bg-elevated) 94%, transparent);
+  border-top: 1px solid color-mix(in oklch, var(--nb-ink) 10%, transparent);
+  backdrop-filter: blur(18px);
+  min-height: var(--nb-player-h);
+}
+
+.nb-mini-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nb-ink-muted);
+  font-size: 0.9rem;
+}
+
+.nb-mini-art {
+  grid-area: art;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nb-mini-art img,
+.nb-cover-fallback {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  object-fit: cover;
+  display: block;
+  background: linear-gradient(135deg, var(--nb-surface-2), var(--nb-accent-dim));
+}
+
+.nb-cover-fallback.lg {
+  width: min(72vw, 280px);
+  height: min(72vw, 280px);
+}
+
+.nb-mini-meta {
+  grid-area: meta;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.nb-mini-meta strong,
+.nb-mini-meta span {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nb-mini-meta span {
+  color: var(--nb-ink-muted);
+  font-size: 0.85rem;
+}
+
+.nb-mini-controls {
+  grid-area: controls;
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.nb-mini-controls button {
+  border: 0;
+  background: transparent;
+  color: var(--nb-ink);
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.nb-mini-controls .nb-play {
+  background: var(--nb-accent);
+  color: oklch(0.12 0.02 var(--nb-hue));
+}
+
+.nb-mini-controls.big {
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.nb-mini-controls.big button {
+  width: 44px;
+  height: 44px;
+}
+
+.nb-mini-seek {
+  grid-area: seek;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-mini-seek input[type="range"],
+.nb-expanded-transport input[type="range"] {
+  width: 100%;
+  accent-color: var(--nb-accent);
+}
+
+.nb-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  animation: nb-fade-up 0.35s var(--nb-ease) both;
+}
+
+.nb-expanded-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(40px) saturate(1.2);
+  transform: scale(1.1);
+  opacity: 0.35;
+}
+
+.nb-expanded-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--nb-bg) 70%, transparent);
+}
+
+.nb-expanded-close {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 2;
+  border: 0;
+  background: var(--nb-surface);
+  border-radius: 999px;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.nb-expanded-body {
+  position: relative;
+  z-index: 1;
+  width: min(960px, 100%);
+  height: min(920px, 100%);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  padding: 2rem;
+  align-items: center;
+}
+
+.nb-expanded-art img {
+  width: min(72vw, 320px);
+  height: min(72vw, 320px);
+  border-radius: 18px;
+  object-fit: cover;
+  box-shadow: var(--nb-shadow);
+}
+
+.nb-expanded-meta h2 {
+  font-family: var(--nb-font-display);
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  margin: 0 0 0.35rem;
+}
+
+.nb-expanded-meta p {
+  margin: 0.15rem 0;
+}
+
+.nb-expanded-meta .muted,
+.nb-lyrics .muted,
+.muted {
+  color: var(--nb-ink-muted);
+}
+
+.nb-lyrics {
+  max-height: 42vh;
+  overflow: auto;
+  padding-right: 0.5rem;
+}
+
+.nb-lyrics p {
+  margin: 0.45rem 0;
+  opacity: 0.45;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.nb-lyrics p.is-active {
+  opacity: 1;
+  transform: scale(1.02);
+  color: var(--nb-accent);
+  font-weight: 700;
+}
+
+.nb-expanded-transport {
+  grid-column: 1 / -1;
+}
+
+.nb-time {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--nb-ink-muted);
+  margin: 0.35rem 0 0.75rem;
+}
+
+@media (max-width: 800px) {
+  .nb-expanded-body {
+    grid-template-columns: 1fr;
+    overflow: auto;
+    place-items: center;
+    text-align: center;
+  }
+  .nb-lyrics {
+    text-align: left;
+    width: 100%;
+  }
+}

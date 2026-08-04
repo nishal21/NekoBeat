@@ -2,6 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    nekobeat_lib::gst_init::ensure_initialized();
     nekobeat_lib::run();
 }

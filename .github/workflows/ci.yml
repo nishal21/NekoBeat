@@ -49,13 +49,7 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libunwind-dev \
-            libasound2-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            libgstreamer-plugins-bad1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-libav
+            libasound2-dev
       - run: npm ci
       - name: Place yt-dlp for resources check
         run: |

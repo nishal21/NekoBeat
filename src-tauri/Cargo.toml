@@ -1,16 +1,11 @@
 [package]
 name = "nekobeat"
 version = "0.3.0"
-description = "A Tauri App"
+description = "NekoBeat — library, stream, and HiFi"
 authors = ["Nishal"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "nekobeat_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -24,31 +19,28 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rodio = { version = "0.19.0", features = ["symphonia-all"] }
-lofty = "0.23.2"
+lofty = "0.22"
 walkdir = "2.5.0"
-rusqlite = { version = "0.38.0", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1.36", features = ["full"] }
-futures = "0.3.30"
 tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "rustls-tls"] }
-# Required so Tauri's reqwest 0.13 / rustls-no-provider path does not panic ("No provider set") on Android.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-rayon = "1.10"
 url = "2.5"
 urlencoding = "2.1.3"
-lazy_static = "1.5.0"
-regex = "1.12.3"
-hmac = "0.12.1"
-sha2 = "0.10.8"
-base64 = "0.22.1"
-chrono = "0.4.38"
-sha1 = "0.10.6"
+regex = "1.12"
+chrono = "0.4"
 discord-rich-presence = "1.1.0"
 tauri-plugin-global-shortcut = "2.3.1"
-scraper = "0.19"
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-single-instance = { version = "2.4.3", features = ["semver"] }
 tauri-plugin-process = "2.3.1"
+parking_lot = "0.12"
+once_cell = "1.19"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -64,14 +56,6 @@ windows = { version = "0.58", features = [
 jni = "0.21"
 ndk-context = "0.1"
 
-[target.'cfg(not(target_os = "android"))'.dependencies]
-gstreamer = "0.21"
-gstreamer-audio = "0.21"
-# Online YouTube download helper. Kept off Android so Media3 local builds avoid OpenSSL/native-tls.
-rusty_ytdl = "0.7.1"
-
 [features]
-# Production/device builds must enable this so the UI loads from frontendDist
-# instead of build.devUrl (http://localhost:1420).
 custom-protocol = ["tauri/custom-protocol"]
 default = ["custom-protocol"]

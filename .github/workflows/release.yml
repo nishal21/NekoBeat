@@ -86,7 +86,7 @@ jobs:
 
           | Platform | Artifacts |
           |----------|-----------|
-          | Windows | `.msi` / NSIS `.exe` (GStreamer runtime bundled) |
+          | Windows | `.msi` / NSIS `.exe` |
           | Linux | `.deb` / `.AppImage` |
           | macOS | `.dmg` (Apple Silicon + Intel) |
 
@@ -242,7 +242,7 @@ jobs:
           echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PW}" >> "$GITHUB_ENV"
 
-      - name: Linux system deps (WebKit + GStreamer)
+      - name: Linux system deps (WebKit)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
@@ -256,75 +256,8 @@ jobs:
             libunwind-dev \
             libasound2-dev \
             build-essential \
-            curl wget file \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            libgstreamer-plugins-bad1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
-            gstreamer1.0-libav \
-            gstreamer1.0-tools
+            curl wget file
 
-      - name: macOS GStreamer
-        if: startsWith(matrix.platform, 'macos')
-        run: |
-          brew update
-          brew install gstreamer pkg-config
-          echo "PKG_CONFIG_PATH=$(brew --prefix gstreamer)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
-
-      - name: Windows GStreamer (MSI + pkg-config)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          # The build-deps .exe hangs forever on /quiet in Actions. Use official MSIs + msiexec /qn.
-          $ver = '1.26.5'
-          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
-          $runtime = "gstreamer-1.0-msvc-x86_64-$ver.msi"
-          $devel = "gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
-          Write-Host "Downloading $runtime ..."
-          curl.exe -fsSL --retry 3 -o runtime.msi "$base/$runtime"
-          Write-Host "Downloading $devel ..."
-          curl.exe -fsSL --retry 3 -o devel.msi "$base/$devel"
-
-          function Install-Msi([string]$Msi, [string]$Log) {
-            Write-Host "Installing $Msi (quiet, max 10 min)..."
-            $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @(
-              '/i', (Resolve-Path $Msi).Path,
-              '/qn', '/norestart',
-              "INSTALLDIR=C:\gstreamer",
-              "/L*v", $Log
-            ) -PassThru -NoNewWindow
-            if (-not $p.WaitForExit(600000)) {
-              try { Stop-Process -Id $p.Id -Force } catch {}
-              throw "msiexec timed out after 10m for $Msi — see $Log"
-            }
-            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
-              Get-Content $Log -Tail 40 -ErrorAction SilentlyContinue
-              throw "msiexec failed for $Msi exit=$($p.ExitCode)"
-            }
-            Write-Host "Installed $Msi (exit $($p.ExitCode))"
-          }
-
-          Install-Msi 'runtime.msi' 'gst-runtime.log'
-          Install-Msi 'devel.msi' 'gst-devel.log'
-
-          $root = 'C:\gstreamer\1.0\msvc_x86_64'
-          if (-not (Test-Path "$root\lib\pkgconfig")) {
-            Get-ChildItem 'C:\gstreamer' -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 40 FullName
-            throw "GStreamer missing pkgconfig at $root"
-          }
-          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "$root\lib" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          choco install pkgconfiglite -y --no-progress
-          # Bundle resources — gstreamer/ is gitignored; stage from MSI install
-          & .\scripts\stage-gstreamer-windows.ps1 -GstRoot $root
-          Write-Host "GStreamer Windows setup OK"
       - name: Fetch yt-dlp + chmod sidecars (Linux / macOS)
         if: matrix.platform != 'windows-latest'
         run: |
@@ -380,7 +313,7 @@ jobs:
           releaseName: ${{ needs.prepare-release.outputs.release_name }}
           releaseDraft: ${{ needs.prepare-release.outputs.draft == 'true' }}
           prerelease: false
-          # Upload to uploads.github.com often flakes on large GStreamer bundles
+          # Upload to uploads.github.com often flakes on large bundles
           retryAttempts: 5
           uploadWorkflowArtifacts: true
           args: ${{ matrix.args }}
