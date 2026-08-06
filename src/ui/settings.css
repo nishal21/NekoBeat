@@ -1,0 +1,420 @@
+/* Settings — section cards, switches, segmented controls */
+
+.nb-settings {
+  max-width: 720px;
+  animation: nb-fade-up 320ms var(--nb-ease);
+  padding-bottom: 1.5rem;
+}
+
+.nb-settings-hero {
+  margin-bottom: 0.85rem;
+}
+
+.nb-settings-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nb-accent);
+}
+
+.nb-settings-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 1.25rem;
+}
+
+.nb-settings-nav a {
+  text-decoration: none;
+  color: var(--nb-ink-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--nb-line);
+  background: var(--nb-glass-bg);
+  backdrop-filter: blur(10px);
+  transition:
+    color 140ms var(--nb-ease),
+    border-color 140ms var(--nb-ease),
+    background 140ms var(--nb-ease);
+}
+
+.nb-settings-nav a:hover {
+  color: var(--nb-accent);
+  border-color: color-mix(in srgb, var(--nb-accent) 40%, var(--nb-line));
+  background: var(--nb-accent-soft);
+}
+
+.nb-settings-card {
+  margin-bottom: 0.85rem;
+  background: var(--nb-bg-elevated);
+  border: 1px solid var(--nb-line);
+  border-radius: var(--nb-radius-xl);
+  overflow: hidden;
+  box-shadow: var(--nb-shadow);
+  scroll-margin-top: 1rem;
+}
+
+.nb-settings-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem 0.75rem;
+  border-bottom: 1px solid var(--nb-line);
+}
+
+.nb-settings-card-icon {
+  display: grid;
+  place-items: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 10px;
+  background: var(--nb-accent-soft);
+  color: var(--nb-accent);
+  flex-shrink: 0;
+}
+
+.nb-settings-card-head h2 {
+  margin: 0;
+  font-family: var(--nb-font-display);
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.nb-settings-card-head p {
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-settings-card-body {
+  padding: 0.25rem 0.35rem;
+}
+
+.nb-settings-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  padding: 0.8rem 0.85rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--nb-line) 70%, transparent);
+}
+
+.nb-settings-row:last-child {
+  border-bottom: 0;
+}
+
+.nb-settings-row.is-stacked {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+
+.nb-settings-row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.nb-settings-row-label {
+  font-weight: 650;
+  font-size: 0.92rem;
+}
+
+.nb-settings-row-hint {
+  font-size: 0.78rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-settings-row-control {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+}
+
+.nb-settings-row.is-stacked .nb-settings-row-control {
+  justify-content: stretch;
+}
+
+/* Segmented control */
+.nb-seg {
+  display: inline-flex;
+  padding: 0.2rem;
+  gap: 0.15rem;
+  background: var(--nb-surface);
+  border: 1px solid var(--nb-line);
+  border-radius: 12px;
+}
+
+.nb-seg-wrap {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.nb-seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--nb-ink-muted);
+  border-radius: 9px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 140ms var(--nb-ease),
+    color 140ms var(--nb-ease);
+}
+
+.nb-seg-btn:hover {
+  color: var(--nb-ink);
+}
+
+.nb-seg-btn.is-on {
+  background: var(--nb-accent);
+  color: var(--nb-on-accent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--nb-accent) 30%, transparent);
+}
+
+/* Switch */
+.nb-switch {
+  position: relative;
+  width: 2.75rem;
+  height: 1.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--nb-surface-2);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 160ms var(--nb-ease);
+}
+
+.nb-switch i {
+  position: absolute;
+  top: 0.18rem;
+  left: 0.18rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  background: var(--nb-bg-elevated);
+  box-shadow: 0 1px 4px rgba(27, 31, 36, 0.2);
+  transition: transform 160ms var(--nb-ease);
+}
+
+.nb-switch.is-on {
+  background: var(--nb-accent);
+}
+
+.nb-switch.is-on i {
+  transform: translateX(1.2rem);
+}
+
+.nb-settings-range {
+  width: min(200px, 42vw);
+  accent-color: var(--nb-accent);
+}
+
+.nb-settings-crossfade {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.nb-settings-crossfade .nb-settings-range {
+  width: min(160px, 36vw);
+}
+
+.nb-settings-crossfade-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--nb-accent);
+  min-width: 2.4rem;
+}
+
+.nb-accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.nb-accent-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: var(--swatch, var(--nb-accent));
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--swatch, var(--nb-accent)) 35%, transparent);
+  transition: transform 140ms var(--nb-ease), box-shadow 140ms var(--nb-ease);
+}
+
+.nb-accent-swatch:hover {
+  transform: scale(1.08);
+}
+
+.nb-accent-swatch.is-on {
+  border-color: var(--nb-ink);
+  box-shadow:
+    0 0 0 2px var(--nb-bg-elevated),
+    0 0 0 4px var(--swatch, var(--nb-accent));
+}
+
+[data-theme="light"] .nb-settings-card {
+  box-shadow: var(--nb-shadow);
+}
+
+.nb-settings-num {
+  width: 5.5rem;
+  border: 1px solid var(--nb-line);
+  background: var(--nb-surface);
+  border-radius: 10px;
+  padding: 0.45rem 0.6rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.nb-settings-region {
+  width: 4.5rem;
+  text-align: center;
+}
+
+.nb-settings-select {
+  width: min(220px, 48vw);
+  min-width: 8rem;
+}
+
+.nb-settings-folder {
+  margin: 0.55rem 0.65rem 0.35rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--nb-accent-soft) 45%, var(--nb-surface));
+  border: 1px solid color-mix(in srgb, var(--nb-accent) 18%, var(--nb-line));
+}
+
+.nb-settings-folder-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--nb-accent);
+  margin-bottom: 0.25rem;
+}
+
+.nb-settings-folder-top strong {
+  color: var(--nb-ink);
+  font-size: 0.9rem;
+}
+
+.nb-settings-folder-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.78rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-settings-folder-row {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.nb-settings-folder-row .nb-input {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.nb-settings-eq {
+  margin: 0.35rem 0.65rem 0.85rem;
+  padding: 0.85rem;
+  border-radius: 12px;
+  background: var(--nb-surface);
+  border: 1px solid var(--nb-line);
+}
+
+.nb-settings-eq-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+  font-weight: 650;
+  font-size: 0.85rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-settings-eq-head .nb-tap-link {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
+.nb-settings-eq-bands {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: space-between;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.nb-settings-eq-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 2rem;
+}
+
+.nb-settings-eq-band input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 28px;
+  height: 88px;
+  accent-color: var(--nb-accent);
+}
+
+.nb-settings-eq-band span {
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--nb-ink-muted);
+}
+
+.nb-settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 0.85rem 0.85rem;
+}
+
+.nb-settings-foot {
+  margin: 1.25rem 0 0;
+  font-size: 0.8rem;
+  color: var(--nb-ink-muted);
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .nb-settings-row:not(.is-stacked) {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .nb-settings-row-control {
+    justify-content: flex-start;
+  }
+
+  .nb-settings-select,
+  .nb-settings-range {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-settings {
+    animation: none !important;
+  }
+}

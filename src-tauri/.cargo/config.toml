@@ -1,2 +1,3 @@
 [build]
-target-dir = "target"
+# Always compile Rust artifacts on D: (never C: Temp / tiny system drive)
+target-dir = "D:/Codesss/nekobeat/nekobeat/src-tauri/target"

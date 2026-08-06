@@ -54,7 +54,12 @@ pub fn discord_update(
     };
 
     let details = track.title.chars().take(128).collect::<String>();
-    let state = track.artist.chars().take(128).collect::<String>();
+    let mut state = track.artist.chars().take(128).collect::<String>();
+    if let Some(q) = track.quality_label.as_ref().filter(|s| !s.is_empty()) {
+        let combined = format!("{} · {}", state, q);
+        state = combined.chars().take(128).collect();
+    }
+
     let large_text = track
         .album
         .clone()
@@ -62,7 +67,7 @@ pub fn discord_update(
 
     let mut assets = activity::Assets::new()
         .large_text(&large_text)
-        .small_text(if playing { "Playing" } else { "Paused" })
+        .small_text(if playing { "Playing on NekoBeat" } else { "Paused on NekoBeat" })
         .small_image(if playing { "play" } else { "pause" });
 
     if let Some(url) = track
@@ -79,6 +84,10 @@ pub fn discord_update(
         "https://www.google.com/search?q={}",
         urlencoding::encode(&format!("{} {}", track.title, track.artist))
     );
+    let artist_url = format!(
+        "https://www.google.com/search?q={}",
+        urlencoding::encode(&format!("{} artist", track.artist))
+    );
 
     let act = activity::Activity::new()
         .details(&details)
@@ -86,7 +95,10 @@ pub fn discord_update(
         .assets(assets);
 
     // Button label+url must outlive set_activity call
-    let mut act = act.buttons(vec![activity::Button::new("Find", find_url.as_str())]);
+    let mut act = act.buttons(vec![
+        activity::Button::new("Find track", find_url.as_str()),
+        activity::Button::new("Artist", artist_url.as_str()),
+    ]);
 
     if playing {
         let start = now_secs() - (position_ms as i64 / 1000);

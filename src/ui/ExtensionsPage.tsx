@@ -1,28 +1,94 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  Loader2,
+  LogIn,
+  LogOut,
+  Puzzle,
+  RefreshCw,
+  Download,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
+import { hueFromKey } from "../lib/libraryHelpers";
 import type { ExtensionEntry, ExtensionSettingField } from "../lib/types";
+import { DEFAULT_SETTINGS } from "../lib/types";
 import { usePlayer } from "../player/PlayerContext";
+import "./extensions.css";
+
+const DEFAULT_REGISTRY = DEFAULT_SETTINGS.extensionRegistryUrl;
+
+function extLetter(e: ExtensionEntry) {
+  return (e.displayName || e.name || e.id || "?")
+    .replace(/^The\s+/i, "")
+    .trim()
+    .charAt(0)
+    .toUpperCase();
+}
+
+function shortDesc(text: string, max = 110) {
+  const t = (text || "").trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1).trim()}…`;
+}
 
 export function ExtensionsPage() {
   const { settings, setSettings } = usePlayer();
   const [items, setItems] = useState<ExtensionEntry[]>([]);
-  const [registry, setRegistry] = useState(settings.extensionRegistryUrl);
+  const [registry, setRegistry] = useState(
+    settings.extensionRegistryUrl || DEFAULT_REGISTRY,
+  );
   const [msg, setMsg] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [fields, setFields] = useState<ExtensionSettingField[]>([]);
   const [form, setForm] = useState<Record<string, string>>({});
   const [authCode, setAuthCode] = useState("");
 
-  const load = () =>
-    api
-      .extensionsList()
-      .then(setItems)
-      .catch(() => setItems([]));
+  const load = async () => {
+    try {
+      const rows = await api.extensionsList();
+      setItems(rows);
+      return rows;
+    } catch {
+      setItems([]);
+      return [] as ExtensionEntry[];
+    }
+  };
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        let rows = await load();
+        if (!cancelled && rows.length === 0) {
+          const url =
+            settings.extensionRegistryUrl || DEFAULT_REGISTRY;
+          await api.extensionsSetRegistry(url);
+          rows = await api.extensionsRefresh();
+          if (!cancelled) setItems(rows);
+        }
+      } catch {
+        if (!cancelled) setMsg("Could not load registry — try Refresh.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const installedCount = useMemo(
+    () => items.filter((e) => e.installed).length,
+    [items],
+  );
 
   const openLogin = async (id: string) => {
     setActiveId(id);
@@ -34,6 +100,12 @@ export function ExtensionsPage() {
     }
     setForm(init);
     setAuthCode("");
+    requestAnimationFrame(() => {
+      document.getElementById("nb-ext-account")?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    });
   };
 
   const saveCreds = async () => {
@@ -50,7 +122,9 @@ export function ExtensionsPage() {
     } catch {
       window.open(pending.authUrl, "_blank");
     }
-    setMsg(pending.hint || "Complete login in browser, then paste the code below.");
+    setMsg(
+      pending.hint || "Complete login in browser, then paste the code below.",
+    );
   };
 
   const finishLogin = async () => {
@@ -61,147 +135,218 @@ export function ExtensionsPage() {
     await load();
   };
 
-  const applyRegistry = async () => {
-    await api.extensionsSetRegistry(registry);
-    setSettings({ ...settings, extensionRegistryUrl: registry });
-    const rows = await api.extensionsRefresh();
-    setItems(rows);
-    setMsg("Registry updated");
+  const install = async (e: ExtensionEntry) => {
+    setBusyId(e.id);
+    setMsg(null);
+    try {
+      await api.extensionsInstall(e.id);
+      await load();
+      setMsg(
+        e.installed
+          ? `Reinstalled ${e.displayName || e.name}`
+          : `Installed ${e.displayName || e.name}`,
+      );
+    } catch (err) {
+      setMsg(String(err).replace(/^Error:\s*/, "") || "Install failed");
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  return (
-    <section>
-      <h1 className="nb-page-title">Extensions</h1>
-      <p className="nb-page-sub">
-        SpotiFLAC Mobile pattern: install providers, then{" "}
-        <strong>login / Connect</strong> before HiFi downloads. Cloud resolve +
-        docs:{" "}
-        <a href="https://api.zarz.moe/" target="_blank" rel="noreferrer">
-          api.zarz.moe
-        </a>{" "}
-        ·{" "}
-        <a href="https://spotiflac.zarz.moe/docs" target="_blank" rel="noreferrer">
-          extension docs
-        </a>
-        .
-      </p>
+  const refresh = async () => {
+    setRefreshing(true);
+    setMsg(null);
+    try {
+      const url = registry.trim() || DEFAULT_REGISTRY;
+      await api.extensionsSetRegistry(url);
+      setSettings({ ...settings, extensionRegistryUrl: url });
+      const rows = await api.extensionsRefresh();
+      setItems(rows);
+      setMsg(`Catalog updated · ${rows.length} providers`);
+    } catch (err) {
+      setMsg(String(err).replace(/^Error:\s*/, "") || "Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <input
-          className="nb-input"
-          value={registry}
-          onChange={(e) => setRegistry(e.target.value)}
-          placeholder="https://github.com/owner/repo or raw registry.json"
-        />
-        <button type="button" className="nb-btn" onClick={applyRegistry}>
-          Set registry
-        </button>
+  const activeName =
+    items.find((x) => x.id === activeId)?.displayName ||
+    items.find((x) => x.id === activeId)?.name ||
+    activeId;
+
+  return (
+    <section className="nb-ext">
+      <header className="nb-ext-bar">
+        <div>
+          <p className="nb-ext-kicker">
+            <Puzzle size={14} /> SpotiFLAC registry
+          </p>
+          <h1 className="nb-page-title">Extensions</h1>
+          <p className="nb-page-sub">
+            Install providers for HiFi search &amp; download. Registry is already
+            set — tap Install.
+          </p>
+        </div>
         <button
           type="button"
-          className="nb-btn ghost"
-          onClick={async () => setItems(await api.extensionsRefresh())}
+          className="nb-btn ghost nb-ext-refresh"
+          onClick={() => void refresh()}
+          disabled={refreshing || loading}
         >
+          {refreshing ? (
+            <Loader2 size={16} className="nb-spin" />
+          ) : (
+            <RefreshCw size={16} />
+          )}
           Refresh
         </button>
-      </div>
-      {msg ? <p style={{ color: "var(--nb-accent)" }}>{msg}</p> : null}
+      </header>
 
-      {items.length ? (
-        items.map((e) => (
-          <div key={e.id} className="nb-track-row">
-            <div className="nb-cover" />
-            <div style={{ minWidth: 0 }}>
-              <strong>
-                {e.displayName || e.name} · {e.version}
-                {e.loggedIn ? (
-                  <span className="nb-quality-badge" style={{ marginLeft: 8 }}>
-                    Logged in
-                  </span>
-                ) : e.needsAuth ? (
-                  <span
-                    className="nb-quality-badge tone-stream"
-                    style={{ marginLeft: 8 }}
-                  >
-                    Login needed
-                  </span>
-                ) : null}
-              </strong>
-              <span
-                style={{
-                  display: "block",
-                  color: "var(--nb-ink-muted)",
-                  fontSize: "0.85rem",
-                }}
+      <div className="nb-ext-stats">
+        <span>
+          {loading
+            ? "Loading catalog…"
+            : `${items.length} in catalog · ${installedCount} installed`}
+        </span>
+        <span className="nb-ext-stats-muted" title={registry}>
+          Default registry
+        </span>
+      </div>
+
+      {msg ? <p className="nb-ext-msg">{msg}</p> : null}
+
+      {loading ? (
+        <div className="nb-ext-loading" aria-busy="true">
+          <Loader2 size={28} className="nb-spin" />
+          <span>Fetching providers…</span>
+        </div>
+      ) : items.length ? (
+        <div className="nb-ext-grid">
+          {items.map((e) => {
+            const hue = hueFromKey(e.id || e.name);
+            const busy = busyId === e.id;
+            return (
+              <article
+                key={e.id}
+                className={`nb-ext-card${e.installed ? " is-installed" : ""}`}
               >
-                {e.category} — {e.description}
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className="nb-btn ghost"
-                onClick={async () => {
-                  await api.extensionsInstall(e.id);
-                  await load();
-                }}
-              >
-                {e.installed ? "Reinstall" : "Install"}
-              </button>
-              {e.needsAuth ? (
-                <button
-                  type="button"
-                  className="nb-btn"
-                  onClick={() => openLogin(e.id)}
-                >
-                  {e.loggedIn ? "Account" : "Login"}
-                </button>
-              ) : null}
-              {e.loggedIn ? (
-                <button
-                  type="button"
-                  className="nb-btn ghost"
-                  onClick={async () => {
-                    await api.extensionsLogout(e.id);
-                    await load();
+                <div
+                  className="nb-ext-icon"
+                  style={{
+                    background: `linear-gradient(145deg, hsl(${hue} 42% 42%), hsl(${(hue + 28) % 360} 38% 28%))`,
                   }}
+                  aria-hidden
                 >
-                  Logout
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ))
+                  {extLetter(e)}
+                </div>
+                <div className="nb-ext-body">
+                  <div className="nb-ext-title-row">
+                    <strong>{e.displayName || e.name}</strong>
+                    <span className="nb-ext-ver">{e.version}</span>
+                  </div>
+                  <div className="nb-ext-badges">
+                    {e.installed ? (
+                      <span className="nb-quality-badge tone-ok">
+                        <Check size={11} /> Installed
+                      </span>
+                    ) : (
+                      <span className="nb-quality-badge">Not installed</span>
+                    )}
+                    {e.loggedIn ? (
+                      <span className="nb-quality-badge tone-ok">Logged in</span>
+                    ) : e.needsAuth ? (
+                      <span className="nb-quality-badge tone-stream">
+                        Account optional
+                      </span>
+                    ) : null}
+                    {e.category ? (
+                      <span className="nb-ext-cat">{e.category}</span>
+                    ) : null}
+                  </div>
+                  <p className="nb-ext-desc">{shortDesc(e.description)}</p>
+                </div>
+                <div className="nb-ext-actions">
+                  <button
+                    type="button"
+                    className="nb-btn nb-ext-install"
+                    disabled={busy}
+                    onClick={() => void install(e)}
+                  >
+                    {busy ? (
+                      <Loader2 size={15} className="nb-spin" />
+                    ) : (
+                      <Download size={15} />
+                    )}
+                    {e.installed ? "Reinstall" : "Install"}
+                  </button>
+                  {e.needsAuth ? (
+                    <button
+                      type="button"
+                      className="nb-btn ghost"
+                      onClick={() => void openLogin(e.id)}
+                    >
+                      <LogIn size={14} />
+                      {e.loggedIn ? "Account" : "Sign in"}
+                    </button>
+                  ) : null}
+                  {e.loggedIn ? (
+                    <button
+                      type="button"
+                      className="nb-btn ghost"
+                      onClick={async () => {
+                        await api.extensionsLogout(e.id);
+                        await load();
+                      }}
+                    >
+                      <LogOut size={14} />
+                      Logout
+                    </button>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
       ) : (
-        <div className="nb-empty">
-          No catalog yet — set a registry URL and refresh.
+        <div className="nb-ext-empty">
+          <Puzzle size={28} strokeWidth={1.5} />
+          <strong>No catalog yet</strong>
+          <span>Refresh to load the default SpotiFLAC registry.</span>
+          <button
+            type="button"
+            className="nb-btn"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+          >
+            {refreshing ? <Loader2 size={16} className="nb-spin" /> : null}
+            Load registry
+          </button>
         </div>
       )}
 
       {activeId ? (
-        <div className="nb-login-panel">
-          <h2 style={{ fontFamily: "var(--nb-font-display)" }}>
-            Login · {activeId}
-          </h2>
+        <div id="nb-ext-account" className="nb-login-panel nb-ext-account">
+          <h2>Account · {activeName}</h2>
           <p className="nb-page-sub">
-            Same idea as SpotiFLAC Mobile extension settings: credentials and/or
-            Connect (OAuth / browser verify), then paste callback if needed.
+            Optional — only if this provider needs it for downloads.
           </p>
           {fields
             .filter((f) => f.type !== "button")
             .map((f) => (
-              <label key={f.key} style={{ display: "block", marginBottom: 12 }}>
-                <span style={{ fontWeight: 600 }}>{f.label}</span>
+              <label key={f.key} className="nb-ext-field">
+                <span>{f.label}</span>
                 <input
                   className="nb-input"
                   type={f.type === "secret" || f.secret ? "password" : "text"}
                   value={form[f.key] ?? ""}
-                  onChange={(e) =>
-                    setForm({ ...form, [f.key]: e.target.value })
+                  onChange={(ev) =>
+                    setForm({ ...form, [f.key]: ev.target.value })
                   }
                 />
               </label>
             ))}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <div className="nb-ext-account-actions">
             <button type="button" className="nb-btn ghost" onClick={saveCreds}>
               Save credentials
             </button>
@@ -211,13 +356,13 @@ export function ExtensionsPage() {
               </button>
             ) : null}
           </div>
-          <label style={{ display: "block", marginBottom: 12 }}>
-            <span style={{ fontWeight: 600 }}>OAuth callback / grant code</span>
+          <label className="nb-ext-field">
+            <span>OAuth callback / grant code</span>
             <input
               className="nb-input"
               value={authCode}
-              onChange={(e) => setAuthCode(e.target.value)}
-              placeholder="Paste after browser login (optional if password set)"
+              onChange={(ev) => setAuthCode(ev.target.value)}
+              placeholder="Paste after browser login (optional)"
             />
           </label>
           <button type="button" className="nb-btn" onClick={finishLogin}>
@@ -226,22 +371,54 @@ export function ExtensionsPage() {
         </div>
       ) : null}
 
-      <h2 style={{ fontFamily: "var(--nb-font-display)", marginTop: 24 }}>
-        Download provider priority
-      </h2>
-      <p className="nb-page-sub">First wins, then auto-fallback (SpotiFLAC Mobile).</p>
-      <input
-        className="nb-input"
-        value={settings.downloadProviderPriority.join(", ")}
-        onChange={(e) => {
-          const ids = e.target.value
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
-          setSettings({ ...settings, downloadProviderPriority: ids });
-          api.extensionsSetPriority("download", ids).catch(() => {});
-        }}
-      />
+      <details
+        className="nb-ext-advanced"
+        open={showAdvanced}
+        onToggle={(ev) =>
+          setShowAdvanced((ev.target as HTMLDetailsElement).open)
+        }
+      >
+        <summary>
+          <ChevronDown size={16} />
+          Advanced — registry URL &amp; download priority
+        </summary>
+        <div className="nb-ext-advanced-body">
+          <label className="nb-ext-field">
+            <span>Registry URL</span>
+            <div className="nb-ext-registry-row">
+              <input
+                className="nb-input"
+                value={registry}
+                onChange={(ev) => setRegistry(ev.target.value)}
+                placeholder="https://github.com/owner/repo or raw registry.json"
+              />
+              <button
+                type="button"
+                className="nb-btn ghost"
+                onClick={() => void refresh()}
+                disabled={refreshing}
+              >
+                Apply
+              </button>
+            </div>
+          </label>
+          <label className="nb-ext-field">
+            <span>Download provider priority (first wins)</span>
+            <input
+              className="nb-input"
+              value={settings.downloadProviderPriority.join(", ")}
+              onChange={(ev) => {
+                const ids = ev.target.value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+                setSettings({ ...settings, downloadProviderPriority: ids });
+                api.extensionsSetPriority("download", ids).catch(() => {});
+              }}
+            />
+          </label>
+        </div>
+      </details>
     </section>
   );
 }

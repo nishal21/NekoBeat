@@ -1,0 +1,501 @@
+/* HiFi — studio download surface (matches Browse energy, coral brand) */
+
+.nb-hifi {
+  position: relative;
+  animation: nb-fade-up 320ms var(--nb-ease);
+}
+
+.nb-hifi.is-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: min(72vh, 680px);
+  padding: 1rem 0 2rem;
+}
+
+.nb-hifi-hero-queue {
+  width: min(640px, 100%);
+  margin-top: 1.5rem;
+  text-align: left;
+}
+
+.nb-hifi-hero {
+  position: relative;
+  z-index: 1;
+  width: min(580px, 100%);
+  text-align: center;
+  padding: 1.25rem 0.5rem;
+}
+
+.nb-hifi-orb {
+  position: absolute;
+  width: min(440px, 72vw);
+  height: min(440px, 72vw);
+  border-radius: 50%;
+  left: 50%;
+  top: 36%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    circle at 40% 35%,
+    color-mix(in srgb, var(--nb-accent) 26%, transparent),
+    transparent 62%
+  );
+  filter: blur(10px);
+  pointer-events: none;
+  z-index: 0;
+  animation: nb-hifi-breathe 9s ease-in-out infinite;
+}
+
+.nb-hifi-orb-2 {
+  width: min(300px, 52vw);
+  height: min(300px, 52vw);
+  top: 58%;
+  left: 58%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, #2a6f7a 20%, transparent),
+    transparent 68%
+  );
+  animation-delay: -4s;
+}
+
+@keyframes nb-hifi-breathe {
+  0%,
+  100% {
+    opacity: 0.8;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.05);
+  }
+}
+
+.nb-hifi-kicker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--nb-accent);
+}
+
+.nb-hifi-brand {
+  position: relative;
+  margin: 0;
+  font-family: var(--nb-font-display);
+  font-size: clamp(2.35rem, 5.5vw, 3.4rem);
+  font-weight: 750;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.nb-hifi-lead {
+  position: relative;
+  margin: 0.7rem auto 1.35rem;
+  max-width: 28rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--nb-ink-muted);
+}
+
+/* Quality segmented control */
+.nb-hifi-quality {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+  padding: 0.3rem;
+  background: color-mix(in srgb, var(--nb-bg-elevated) 70%, transparent);
+  border: 1px solid var(--nb-line);
+  border-radius: 16px;
+  backdrop-filter: blur(8px);
+}
+
+.nb-hifi.is-hero .nb-hifi-quality {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 420px;
+}
+
+.nb-hifi-q {
+  border: 0;
+  background: transparent;
+  border-radius: 12px;
+  padding: 0.55rem 0.4rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  transition:
+    background 140ms var(--nb-ease),
+    color 140ms var(--nb-ease),
+    transform 140ms var(--nb-ease);
+  color: var(--nb-ink-muted);
+}
+
+.nb-hifi-q-label {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.nb-hifi-q-hint {
+  font-size: 0.68rem;
+  opacity: 0.85;
+}
+
+.nb-hifi-q:hover {
+  color: var(--nb-ink);
+  background: color-mix(in srgb, var(--nb-surface) 80%, transparent);
+}
+
+.nb-hifi-q.is-on {
+  background: var(--nb-accent);
+  color: var(--nb-on-accent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--nb-accent) 35%, transparent);
+}
+
+.nb-hifi-q.is-on .nb-hifi-q-hint {
+  opacity: 0.9;
+}
+
+/* Search */
+.nb-hifi-search {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.4rem 0.4rem 1rem;
+  background: var(--nb-bg-elevated);
+  border: 1px solid var(--nb-line);
+  border-radius: 999px;
+  box-shadow: var(--nb-shadow);
+  transition:
+    border-color 160ms var(--nb-ease),
+    box-shadow 200ms var(--nb-ease);
+}
+
+.nb-hifi-search:focus-within {
+  border-color: color-mix(in srgb, var(--nb-accent) 55%, var(--nb-line));
+  box-shadow:
+    var(--nb-shadow),
+    0 0 0 3px color-mix(in srgb, var(--nb-accent) 16%, transparent);
+}
+
+.nb-hifi-search.is-compact {
+  margin-bottom: 1rem;
+  border-radius: 14px;
+  padding-left: 0.85rem;
+}
+
+.nb-hifi-search-icon {
+  color: var(--nb-ink-muted);
+  flex-shrink: 0;
+}
+
+.nb-hifi-input {
+  border: 0;
+  background: transparent;
+  outline: none;
+  min-width: 0;
+  width: 100%;
+  padding: 0.65rem 0.35rem;
+  font-size: 1rem;
+}
+
+.nb-hifi-go {
+  border: 0;
+  background: var(--nb-accent);
+  color: var(--nb-on-accent);
+  border-radius: 999px;
+  padding: 0.65rem 1.15rem;
+  font-weight: 650;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 5.5rem;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--nb-accent) 28%, transparent);
+  transition:
+    transform 140ms var(--nb-ease),
+    filter 140ms var(--nb-ease);
+}
+
+.nb-hifi-go:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.nb-hifi-go:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.nb-hifi-go:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.nb-hifi-folder {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.85rem 0 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--nb-ink-muted);
+  background: color-mix(in srgb, var(--nb-bg-elevated) 75%, transparent);
+  border: 1px solid var(--nb-line);
+  border-radius: 999px;
+}
+
+.nb-hifi-bar .nb-hifi-folder {
+  margin: 0;
+}
+
+.nb-hifi-folder-sep {
+  opacity: 0.5;
+}
+
+.nb-hifi-chips {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-top: 1.1rem;
+}
+
+.nb-hifi-chip {
+  border: 1px solid var(--nb-line);
+  background: color-mix(in srgb, var(--nb-bg-elevated) 80%, transparent);
+  color: var(--nb-ink);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition:
+    background 140ms var(--nb-ease),
+    border-color 140ms var(--nb-ease),
+    transform 140ms var(--nb-ease);
+}
+
+.nb-hifi-chip:hover {
+  border-color: color-mix(in srgb, var(--nb-accent) 40%, var(--nb-line));
+  background: var(--nb-accent-soft);
+  transform: translateY(-1px);
+}
+
+.nb-hifi-steps {
+  position: relative;
+  z-index: 2;
+  list-style: none;
+  margin: 1.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.65rem 1.1rem;
+  color: var(--nb-ink-muted);
+  font-size: 0.8rem;
+}
+
+.nb-hifi-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.nb-hifi-steps span {
+  display: inline-grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--nb-accent-soft);
+  color: var(--nb-accent);
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+
+/* Compact workspace */
+.nb-hifi-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.nb-hifi-err {
+  color: var(--nb-danger);
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.nb-hifi-status-line {
+  color: var(--nb-accent);
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.nb-hifi-loading,
+.nb-hifi-empty-results,
+.nb-hifi-queue-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 22vh;
+  text-align: center;
+  color: var(--nb-ink-muted);
+}
+
+.nb-hifi-empty-results strong,
+.nb-hifi-queue-empty strong {
+  color: var(--nb-ink);
+  font-family: var(--nb-font-display);
+  font-size: 1.2rem;
+}
+
+.nb-hifi-queue-empty {
+  margin-top: 0.25rem;
+  padding: 1.75rem 1rem;
+  border: 1px dashed var(--nb-line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--nb-bg-elevated) 55%, transparent);
+}
+
+.nb-hifi-results {
+  animation: nb-fade-up 280ms var(--nb-ease);
+  margin-bottom: 0.5rem;
+}
+
+.nb-hifi-results-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
+  font-size: 0.8rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-hifi-results .nb-track-list {
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.nb-hifi-results .nb-track-row {
+  border: 1px solid transparent;
+  border-radius: 12px;
+  margin-bottom: 0.3rem;
+  background: var(--nb-bg-elevated);
+  border-bottom: 1px solid transparent;
+  transition:
+    background 140ms var(--nb-ease),
+    border-color 140ms var(--nb-ease),
+    transform 140ms var(--nb-ease);
+}
+
+.nb-hifi-results .nb-track-row:hover {
+  border-color: var(--nb-line);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(27, 31, 36, 0.06);
+}
+
+.nb-hifi-results .nb-track-row.is-active {
+  border-color: color-mix(in srgb, var(--nb-accent) 35%, var(--nb-line));
+  background: color-mix(in srgb, var(--nb-accent-soft) 65%, var(--nb-bg-elevated));
+}
+
+.nb-hifi-row-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.nb-hifi-get {
+  gap: 0.35rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 720px) {
+  .nb-hifi-results .nb-track-row {
+    grid-template-columns: 44px 1fr;
+  }
+
+  .nb-hifi-row-actions {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+  }
+
+  .nb-hifi-get {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .nb-hifi.is-hero {
+    min-height: min(64vh, 560px);
+    padding: 0.5rem 0 1.25rem;
+    overflow-x: hidden;
+  }
+
+  .nb-hifi-quality {
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .nb-hifi-search,
+  .nb-hifi-hero {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .nb-hifi-job {
+    grid-template-columns: auto 1fr;
+  }
+
+  .nb-hifi-job > .nb-btn {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+}
+
+.nb-spin {
+  animation: nb-spin 0.85s linear infinite;
+}
+
+@keyframes nb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-hifi-orb,
+  .nb-hifi,
+  .nb-hifi-results,
+  .nb-spin {
+    animation: none !important;
+  }
+}

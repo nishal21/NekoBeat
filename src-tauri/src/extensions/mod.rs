@@ -292,9 +292,11 @@ pub fn extensions_refresh(
 
 #[tauri::command]
 pub fn extensions_install(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<ExtState>>,
     id: String,
 ) -> Result<(), String> {
+    use tauri::Manager;
     let catalog = state.catalog.lock().clone();
     let entry = catalog
         .into_iter()
@@ -303,11 +305,18 @@ pub fn extensions_install(
     if entry.download_url.is_empty() {
         return Err("no download_url".into());
     }
-    let dir = state
-        .install_dir
-        .lock()
-        .clone()
-        .ok_or_else(|| "refresh catalog first".to_string())?;
+    let mut dir = state.install_dir.lock().clone();
+    if dir.is_none() {
+        let d = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("extensions");
+        std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+        *state.install_dir.lock() = Some(d.clone());
+        dir = Some(d);
+    }
+    let dir = dir.ok_or_else(|| "no install dir".to_string())?;
     let bytes = reqwest::blocking::get(&entry.download_url)
         .map_err(|e| e.to_string())?
         .bytes()
@@ -319,8 +328,17 @@ pub fn extensions_install(
             return Err(format!("sha256 mismatch: got {hash}"));
         }
     }
-    let path = dir.join(format!("{id}.sflx"));
-    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+    let fname = if entry.download_url.contains(".spotiflac-ext") {
+        format!("{id}.spotiflac-ext")
+    } else {
+        format!("{id}.sflx")
+    };
+    let path = dir.join(fname);
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    // Load into SpotiFLAC goja runtime (same as Mobile InstallExtension)
+    if let Err(e) = crate::sidecar::load_package(&app, &path) {
+        return Err(format!("saved package but runtime load failed: {e}"));
+    }
     if let Some(e) = state.catalog.lock().iter_mut().find(|e| e.id == id) {
         e.installed = Some(true);
         e.enabled = Some(true);
@@ -330,13 +348,22 @@ pub fn extensions_install(
 
 #[tauri::command]
 pub fn extensions_set_priority(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<ExtState>>,
     kind: String,
     ids: Vec<String>,
 ) -> Result<(), String> {
     match kind.as_str() {
-        "download" => *state.download_priority.lock() = ids,
-        "metadata" => *state.metadata_priority.lock() = ids,
+        "download" => {
+            *state.download_priority.lock() = ids.clone();
+            let meta = state.metadata_priority.lock().clone();
+            let _ = crate::sidecar::set_priority(&app, &ids, &meta);
+        }
+        "metadata" => {
+            *state.metadata_priority.lock() = ids.clone();
+            let dl = state.download_priority.lock().clone();
+            let _ = crate::sidecar::set_priority(&app, &dl, &ids);
+        }
         _ => return Err("kind must be download|metadata".into()),
     }
     Ok(())
@@ -364,9 +391,11 @@ pub fn extensions_set_settings(
     settings: serde_json::Value,
 ) -> Result<(), String> {
     use tauri::Manager;
-    state.ext_settings.lock().insert(id, settings);
+    state.ext_settings.lock().insert(id.clone(), settings.clone());
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     persist_auth(&state, &dir);
+    // Push credentials into live SpotiFLAC extension runtime
+    let _ = crate::sidecar::set_settings(&app, &id, settings);
     Ok(())
 }
 
@@ -420,6 +449,8 @@ pub fn extensions_complete_login(
         *state.pending_auth.lock() = None;
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         persist_auth(&state, &dir);
+        // Apply settings into go_backend so downloads see the session
+        let _ = crate::sidecar::set_settings(&app, &id, saved);
         Ok(())
     } else {
         Err("Enter email+password or paste OAuth callback / grant code".into())

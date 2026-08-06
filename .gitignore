@@ -48,6 +48,8 @@ src-tauri/android-gst/
 # yt-dlp binaries fetched in CI / locally
 /src-tauri/bin/yt-dlp
 /src-tauri/bin/yt-dlp.exe
+/src-tauri/bin/ffmpeg.exe
+/src-tauri/bin/ffprobe.exe
 # Duplicate SpotiFLAC copies under bin/ — keep only src-tauri/binaries/
 /src-tauri/bin/spotiflac-cli-*
 
@@ -100,4 +102,5 @@ Thumbs.db
 Desktop.ini
 
 # Local docs scratch (keep in-repo docs/ if you want — currently unused)
-# docs/
+docs/
+design.md

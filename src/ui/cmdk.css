@@ -1,0 +1,161 @@
+/* Command palette — Monochrome cmdk energy, NekoBeat neon tokens */
+
+.nb-cmdk {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: start center;
+  padding: min(12vh, 6rem) 1rem 1rem;
+}
+
+.nb-cmdk-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(4, 6, 10, 0.55);
+  backdrop-filter: blur(6px);
+  cursor: default;
+}
+
+.nb-cmdk-panel {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 100%);
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--nb-radius-xl);
+  background: var(--nb-glass-bg);
+  border: 1px solid var(--nb-line);
+  backdrop-filter: saturate(var(--nb-glass-saturate)) blur(22px);
+  -webkit-backdrop-filter: saturate(var(--nb-glass-saturate)) blur(22px);
+  box-shadow: var(--nb-shadow-modal);
+  overflow: hidden;
+  animation: nb-fade-up 200ms var(--nb-ease-out);
+}
+
+.nb-cmdk-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--nb-line);
+  color: var(--nb-ink-muted);
+}
+
+.nb-cmdk-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: 1.05rem;
+  font-weight: 550;
+  color: var(--nb-ink);
+}
+
+.nb-cmdk-kbd {
+  font-family: var(--nb-font-mono);
+  font-size: 0.68rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--nb-line);
+  color: var(--nb-ink-muted);
+}
+
+.nb-cmdk-x {
+  border: 0;
+  background: transparent;
+  color: var(--nb-ink-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.nb-cmdk-x:hover {
+  background: var(--nb-surface);
+  color: var(--nb-ink);
+}
+
+.nb-cmdk-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.nb-cmdk-empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  color: var(--nb-ink-muted);
+  font-size: 0.9rem;
+}
+
+.nb-cmdk-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 0.7rem;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--nb-ink);
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.nb-cmdk-row.is-track {
+  grid-template-columns: 36px 1fr auto;
+}
+
+.nb-cmdk-row:hover,
+.nb-cmdk-row.is-on {
+  background: var(--nb-accent-soft);
+}
+
+.nb-cmdk-row span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nb-cmdk-row strong {
+  font-size: 0.92rem;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nb-cmdk-row em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--nb-ink-muted);
+  margin-top: 0.1rem;
+}
+
+.nb-cmdk-cover,
+.nb-cmdk-cover-wrap {
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 8px !important;
+}
+
+.nb-cmdk-play {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--nb-accent);
+}
+
+.nb-cmdk-foot {
+  padding: 0.55rem 1rem;
+  border-top: 1px solid var(--nb-line);
+}

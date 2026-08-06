@@ -7,7 +7,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
 #[derive(Clone)]
@@ -162,20 +162,60 @@ fn scan_file(path: &Path, cover_dir: &Path) -> Option<DbTrack> {
     let id = format!("{:x}", md5_like(&path.to_string_lossy()));
 
     let mut cover_path = None;
-    if let Some(tag) = tag {
-        if let Some(pic) = tag.pictures().first() {
-            let out = cover_dir.join(format!("{id}.jpg"));
-            if std::fs::write(&out, pic.data()).is_ok() {
-                cover_path = Some(out.to_string_lossy().into_owned());
+    // Reuse on-disk cache if present (don't re-extract every scan).
+    for ext in ["jpg", "jpeg", "png", "webp"] {
+        let existing = cover_dir.join(format!("{id}.{ext}"));
+        if existing.is_file() {
+            cover_path = Some(existing.to_string_lossy().into_owned());
+            break;
+        }
+    }
+    if cover_path.is_none() {
+        // Check every tag — some MP3s stash APIC on a non-primary frame set
+        for t in tagged.tags() {
+            if let Some(pic) = t.pictures().first() {
+                let mime = pic.mime_type().map(|m| m.as_str()).unwrap_or("image/jpeg");
+                let ext = if mime.contains("png") {
+                    "png"
+                } else if mime.contains("webp") {
+                    "webp"
+                } else {
+                    "jpg"
+                };
+                let out = cover_dir.join(format!("{id}.{ext}"));
+                if std::fs::write(&out, pic.data()).is_ok() {
+                    cover_path = Some(out.to_string_lossy().into_owned());
+                    break;
+                }
             }
         }
     }
     if cover_path.is_none() {
         if let Some(folder) = path.parent() {
-            for name in ["cover.jpg", "Cover.jpg", "folder.jpg", "Folder.jpg"] {
+            for name in [
+                "cover.jpg",
+                "Cover.jpg",
+                "folder.jpg",
+                "Folder.jpg",
+                "cover.png",
+                "folder.png",
+                "AlbumArt.jpg",
+                "AlbumArtSmall.jpg",
+                "front.jpg",
+                "Front.jpg",
+            ] {
                 let c = folder.join(name);
-                if c.exists() {
-                    cover_path = Some(c.to_string_lossy().into_owned());
+                if c.is_file() {
+                    let ext = c
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("jpg");
+                    let dest = cover_dir.join(format!("{id}.{ext}"));
+                    if std::fs::copy(&c, &dest).is_ok() {
+                        cover_path = Some(dest.to_string_lossy().into_owned());
+                    } else {
+                        cover_path = Some(c.to_string_lossy().into_owned());
+                    }
                     break;
                 }
             }
@@ -226,6 +266,41 @@ pub fn scan_paths(db: &LibraryDb, paths: &[String], app_dir: &Path) -> Result<Ve
         }
     }
     db.list()
+}
+
+/// Add a single downloaded file into the library (HiFi / imports).
+pub fn import_file(db: &LibraryDb, app_dir: &Path, path: &Path) -> Result<TrackMeta, String> {
+    let cover_dir = app_dir.join("covers");
+    std::fs::create_dir_all(&cover_dir).map_err(|e| e.to_string())?;
+    let t = scan_file(path, &cover_dir).ok_or_else(|| {
+        format!("Could not read audio file: {}", path.display())
+    })?;
+    db.upsert(&t)?;
+    Ok(TrackMeta {
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        path: Some(t.path),
+        duration_ms: t.duration_ms,
+        cover_url: t.cover_path,
+        source: Some("local".into()),
+        isrc: None,
+        spotify_id: None,
+        stream_url: None,
+        quality_label: None,
+    })
+}
+
+pub fn import_downloaded(app: &tauri::AppHandle, path: &Path) -> Result<TrackMeta, String> {
+    let db = app.state::<LibraryDb>();
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    let meta = import_file(&db, &dir, path)?;
+    let _ = app.emit("library-changed", meta.clone());
+    Ok(meta)
 }
 
 #[tauri::command]

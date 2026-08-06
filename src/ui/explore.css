@@ -1,0 +1,111 @@
+.nb-explore {
+  animation: nb-fade-up 320ms var(--nb-ease);
+  max-width: 960px;
+}
+
+.nb-explore-hero {
+  margin-bottom: 1.25rem;
+}
+
+.nb-explore-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nb-accent);
+}
+
+.nb-explore-section {
+  margin-bottom: 1.5rem;
+}
+
+.nb-explore-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+  font-family: var(--nb-font-display);
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.nb-explore-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.nb-explore-card {
+  text-align: left;
+  border: 1px solid var(--nb-line);
+  border-radius: 14px;
+  padding: 1rem 0.9rem;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--nb-accent) 16%, var(--nb-surface)),
+      var(--nb-bg-elevated)
+    );
+  color: var(--nb-ink);
+  cursor: pointer;
+  transition: transform 140ms var(--nb-ease), border-color 140ms var(--nb-ease);
+}
+
+.nb-explore-card:hover,
+.nb-explore-card.is-on {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--nb-accent) 40%, var(--nb-line));
+}
+
+.nb-explore-card strong {
+  display: block;
+  font-size: 0.95rem;
+  margin-bottom: 0.25rem;
+}
+
+.nb-explore-card span {
+  font-size: 0.75rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-explore-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.nb-explore-genre {
+  border: 1px solid var(--nb-line);
+  background: var(--nb-surface);
+  color: var(--nb-ink-muted);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  font-weight: 650;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.nb-explore-genre.is-on,
+.nb-explore-genre:hover {
+  color: var(--nb-accent);
+  background: var(--nb-accent-soft);
+  border-color: color-mix(in srgb, var(--nb-accent) 35%, var(--nb-line));
+}
+
+.nb-explore-results-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.nb-explore-results-head h2 {
+  margin: 0;
+  font-family: var(--nb-font-display);
+  font-size: 1.15rem;
+}

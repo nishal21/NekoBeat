@@ -7,6 +7,9 @@ use std::sync::Arc;
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: String,
+    /// Brand accent id: coral | volt | rose | teal | sky | orchid
+    #[serde(default = "default_accent_preset")]
+    pub accent_preset: String,
     pub discord_rich_presence: bool,
     pub notification_lyrics: bool,
     pub sleep_timer_minutes: Option<u64>,
@@ -37,13 +40,21 @@ pub struct AppSettings {
     pub gapless: bool,
     pub crossfade_seconds: f32,
     pub eq_bands: Vec<f32>,
+    /// Absolute folder for HiFi downloads (empty = app data /hifi)
+    #[serde(default)]
+    pub download_dir: String,
+}
+
+fn default_accent_preset() -> String {
+    "coral".into()
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            theme: "system".into(),
-            discord_rich_presence: true,
+            theme: "dark".into(),
+            accent_preset: default_accent_preset(),
+            discord_rich_presence: false,
             notification_lyrics: true,
             sleep_timer_minutes: None,
             extension_registry_url: "https://github.com/zarzet/SpotiFLAC-Extension".into(),
@@ -76,6 +87,7 @@ impl Default for AppSettings {
             gapless: true,
             crossfade_seconds: 0.0,
             eq_bands: vec![0.0; 10],
+            download_dir: String::new(),
         }
     }
 }

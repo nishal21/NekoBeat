@@ -1,46 +1,83 @@
 import { NavLink, Outlet } from "react-router-dom";
 import {
+  Compass,
   Download,
   Heart,
-  Home,
   Library,
   Puzzle,
   Search,
   Settings,
 } from "lucide-react";
+import { useState } from "react";
 import { MiniPlayer } from "../player/MiniPlayer";
 import { ExpandedPlayer } from "../player/ExpandedPlayer";
+import { NowPlayingShell } from "../player/npMotion";
 import { usePlayer } from "../player/PlayerContext";
+import {
+  CommandPalette,
+  useCommandPaletteHotkey,
+} from "./CommandPalette";
 import "./shell.css";
 
-const tabs = [
-  { to: "/", label: "Listen", icon: Home },
+const desktopTabs = [
+  { to: "/", label: "Library", icon: Library },
+  { to: "/explore", label: "Explore", icon: Compass },
   { to: "/browse", label: "Browse", icon: Search },
-  { to: "/library", label: "Library", icon: Library },
   { to: "/liked", label: "Liked", icon: Heart },
   { to: "/hifi", label: "HiFi", icon: Download },
   { to: "/extensions", label: "Extensions", icon: Puzzle },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
+const mobileTabs = [
+  { to: "/", label: "Library", icon: Library },
+  { to: "/explore", label: "Explore", icon: Compass },
+  { to: "/browse", label: "Browse", icon: Search },
+  { to: "/liked", label: "Liked", icon: Heart },
+  { to: "/settings", label: "Settings", icon: Settings },
+];
+
 export function AppShell() {
-  const { expanded } = usePlayer();
+  const { expanded, coverSrc, playing } = usePlayer();
+  const [cmdk, setCmdk] = useState(false);
+  useCommandPaletteHotkey(setCmdk);
+
+  const ambient =
+    coverSrc &&
+    (coverSrc.startsWith("http") ||
+      coverSrc.startsWith("data:") ||
+      coverSrc.startsWith("asset:") ||
+      coverSrc.includes("asset.localhost"))
+      ? { backgroundImage: `url("${coverSrc.replace(/"/g, "")}")` }
+      : undefined;
+
   return (
-    <div className="nb-shell">
+    <div className={`nb-shell${playing ? " is-playing" : ""}`}>
+      <div className="nb-shell-ambient" style={ambient} aria-hidden />
       <aside className="nb-sidebar">
         <div className="nb-brand">
           <span className="nb-brand-mark">N</span>
-          <div>
+          <div className="nb-brand-text">
             <strong>NekoBeat</strong>
-            <p>Listen · Library · HiFi</p>
+            <p>any source · one beat</p>
           </div>
         </div>
-        <nav className="nb-nav">
-          {tabs.map(({ to, label, icon: Icon }) => (
+        <button
+          type="button"
+          className="nb-cmdk-trigger"
+          onClick={() => setCmdk(true)}
+        >
+          <Search size={15} />
+          <span>Search</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+        <nav className="nb-nav" aria-label="Primary">
+          {desktopTabs.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               end={to === "/"}
+              title={label}
               className={({ isActive }) =>
                 `nb-nav-link${isActive ? " is-active" : ""}`
               }
@@ -57,7 +94,7 @@ export function AppShell() {
       </main>
 
       <nav className="nb-bottom-tabs" aria-label="Primary">
-        {tabs.slice(0, 5).map(({ to, label, icon: Icon }) => (
+        {mobileTabs.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
@@ -73,7 +110,10 @@ export function AppShell() {
       </nav>
 
       <MiniPlayer />
-      {expanded ? <ExpandedPlayer /> : null}
+      <NowPlayingShell open={expanded}>
+        <ExpandedPlayer />
+      </NowPlayingShell>
+      <CommandPalette open={cmdk} onClose={() => setCmdk(false)} />
     </div>
   );
 }

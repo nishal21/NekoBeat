@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:ensure": "node scripts/ensure-vite.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev --config src-tauri/tauri.desktop.conf.json",
+    "tauri:dev": "node scripts/tauri-dev.mjs",
+    "dev:clean": "scripts\\dev-clean.cmd",
     "tauri:build": "tauri build --config src-tauri/tauri.desktop.conf.json --config src-tauri/tauri.windows.conf.json",
     "tauri:build:linux": "tauri build --config src-tauri/tauri.desktop.conf.json --config src-tauri/tauri.linux.conf.json",
     "tauri:build:macos": "tauri build --config src-tauri/tauri.desktop.conf.json --config src-tauri/tauri.macos.conf.json",

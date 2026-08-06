@@ -1,0 +1,297 @@
+/* Extensions — install-first catalog (registry on by default) */
+
+.nb-ext {
+  animation: nb-fade-up 320ms var(--nb-ease);
+}
+
+.nb-ext-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.nb-ext-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nb-accent);
+}
+
+.nb-ext-refresh {
+  gap: 0.4rem;
+}
+
+.nb-ext-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+  color: var(--nb-ink-muted);
+}
+
+.nb-ext-stats-muted {
+  opacity: 0.75;
+}
+
+.nb-ext-msg {
+  margin: 0 0 0.85rem;
+  color: var(--nb-accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.nb-ext-loading,
+.nb-ext-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-height: 28vh;
+  text-align: center;
+  color: var(--nb-ink-muted);
+}
+
+.nb-ext-empty strong {
+  color: var(--nb-ink);
+  font-family: var(--nb-font-display);
+  font-size: 1.2rem;
+}
+
+.nb-ext-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.nb-ext-card {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  gap: 0.85rem;
+  align-items: start;
+  padding: 0.85rem 1rem;
+  background: var(--nb-bg-elevated);
+  border: 1px solid var(--nb-line);
+  border-radius: 14px;
+  transition:
+    border-color 140ms var(--nb-ease),
+    box-shadow 160ms var(--nb-ease),
+    transform 140ms var(--nb-ease);
+}
+
+.nb-ext-card:hover {
+  border-color: color-mix(in srgb, var(--nb-accent) 28%, var(--nb-line));
+  box-shadow: 0 4px 16px rgba(27, 31, 36, 0.06);
+  transform: translateY(-1px);
+}
+
+.nb-ext-card.is-installed {
+  border-color: color-mix(in srgb, #2f9e44 22%, var(--nb-line));
+}
+
+.nb-ext-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-family: var(--nb-font-display);
+  font-weight: 750;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.nb-ext-body {
+  min-width: 0;
+}
+
+.nb-ext-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.nb-ext-title-row strong {
+  font-size: 0.98rem;
+}
+
+.nb-ext-ver {
+  font-size: 0.75rem;
+  color: var(--nb-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nb-ext-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0.4rem;
+  align-items: center;
+}
+
+.nb-ext-badges .nb-quality-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.nb-ext-cat {
+  font-size: 0.72rem;
+  color: var(--nb-ink-muted);
+  text-transform: capitalize;
+}
+
+.nb-ext-desc {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--nb-ink-muted);
+}
+
+.nb-ext-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: stretch;
+  min-width: 7.5rem;
+}
+
+.nb-ext-install {
+  gap: 0.35rem;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.nb-ext-actions .nb-btn.ghost {
+  gap: 0.3rem;
+  justify-content: center;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.7rem;
+}
+
+.nb-ext-account h2 {
+  margin: 0 0 0.35rem;
+  font-family: var(--nb-font-display);
+  font-size: 1.15rem;
+}
+
+.nb-ext-field {
+  display: block;
+  margin-bottom: 0.85rem;
+}
+
+.nb-ext-field > span {
+  display: block;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.nb-ext-account-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.nb-ext-advanced {
+  margin-top: 1.75rem;
+  border: 1px solid var(--nb-line);
+  border-radius: 14px;
+  background: var(--nb-bg-elevated);
+  overflow: hidden;
+}
+
+.nb-ext-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.85rem 1rem;
+  font-weight: 650;
+  font-size: 0.9rem;
+  color: var(--nb-ink-muted);
+  user-select: none;
+}
+
+.nb-ext-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nb-ext-advanced[open] > summary {
+  color: var(--nb-ink);
+  border-bottom: 1px solid var(--nb-line);
+}
+
+.nb-ext-advanced[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.nb-ext-advanced > summary svg {
+  transition: transform 160ms var(--nb-ease);
+}
+
+.nb-ext-advanced-body {
+  padding: 1rem;
+}
+
+.nb-ext-registry-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.nb-ext-registry-row .nb-input {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.nb-spin {
+  animation: nb-spin 0.85s linear infinite;
+}
+
+@keyframes nb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 720px) {
+  .nb-ext-card {
+    grid-template-columns: 48px 1fr;
+  }
+
+  .nb-ext-actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .nb-ext-install {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-ext,
+  .nb-spin {
+    animation: none !important;
+  }
+}

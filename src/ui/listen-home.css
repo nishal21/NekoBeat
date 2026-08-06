@@ -1,0 +1,64 @@
+.nb-recent {
+  margin-bottom: 1.5rem;
+}
+
+.nb-recent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.nb-recent-head h2 {
+  margin: 0;
+  font-family: var(--nb-font-display);
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.nb-recent-row {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.35rem;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.nb-recent-card {
+  flex: 0 0 108px;
+  scroll-snap-align: start;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--nb-ink);
+  cursor: pointer;
+  padding: 0;
+}
+
+.nb-recent-cover {
+  width: 108px;
+  height: 108px;
+  border-radius: 12px;
+  margin-bottom: 0.4rem;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--nb-ink) 18%, transparent);
+}
+
+.nb-recent-card strong,
+.nb-recent-card span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.nb-recent-card span {
+  color: var(--nb-ink-muted);
+  font-weight: 500;
+}
+
+.nb-recent-card.is-on strong {
+  color: var(--nb-accent);
+}

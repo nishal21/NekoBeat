@@ -314,7 +314,7 @@ pub fn fetch_config(api_base: &str) -> Result<RemoteConfig, String> {
         "{}/v1/spotiflac-mobile/config",
         api_base.trim_end_matches('/')
     );
-    let client = http_client(20)?;
+    let client = http_client(5)?;
     let body: serde_json::Value = client
         .get(&url)
         .send()

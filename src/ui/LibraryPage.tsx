@@ -45,7 +45,9 @@ export function LibraryPage() {
   return (
     <section>
       <h1 className="nb-page-title">Library</h1>
-      <p className="nb-page-sub">Local files with Harmonoid-grade covers and lyrics.</p>
+      <p className="nb-page-sub">
+        Local folders, tags, and album art — scan once, play forever.
+      </p>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button type="button" className="nb-btn" onClick={scan} disabled={busy}>
           {busy ? "Scanning…" : "Scan folder"}

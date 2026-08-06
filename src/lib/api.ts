@@ -29,15 +29,33 @@ export const api = {
     invoke("library_like", { id, liked }),
   libraryLiked: () => invoke<TrackMeta[]>("library_liked"),
 
-  searchStream: (query: string) =>
-    invoke<TrackMeta[]>("stream_search", { query }),
+  searchStream: async (query: string) => {
+    try {
+      const rows = await invoke<TrackMeta[]>("stream_search", { query });
+      if (rows?.length) return rows;
+    } catch {
+      /* failover */
+    }
+    try {
+      return await invoke<TrackMeta[]>("hifi_search", { query });
+    } catch {
+      return [];
+    }
+  },
   resolveStream: (track: TrackMeta) =>
     invoke<{ proxyUrl: string; track: TrackMeta }>("stream_resolve", { track }),
+  invalidateStream: (trackId: string) =>
+    invoke("stream_invalidate", { trackId }),
 
   searchHifi: (query: string) => invoke<TrackMeta[]>("hifi_search", { query }),
   enqueueHifi: (track: TrackMeta) =>
     invoke<DownloadJob>("hifi_enqueue", { track }),
   hifiJobs: () => invoke<DownloadJob[]>("hifi_jobs"),
+  hifiDownloadDir: () => invoke<string>("hifi_download_dir"),
+  openPath: async (path: string) => {
+    const { openPath } = await import("@tauri-apps/plugin-opener");
+    await openPath(path);
+  },
 
   getLyrics: (track: TrackMeta) =>
     invoke<{ lines: LyricLine[]; plain?: string }>("lyrics_get", { track }),

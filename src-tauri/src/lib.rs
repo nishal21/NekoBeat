@@ -9,7 +9,9 @@ pub mod lyrics;
 pub mod lyrics_notification;
 pub mod playback;
 pub mod settings;
+pub mod sidecar;
 pub mod stream;
+pub mod ytdlp;
 pub mod zarz_api;
 
 use extensions::ExtState;
@@ -19,53 +21,37 @@ use parking_lot::Mutex;
 use playback::shared_player;
 use std::sync::Arc;
 use stream::StreamState;
-use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default();
-
-    #[cfg(not(mobile))]
-    {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
-        }));
-    }
-
-    builder = builder
+    tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
-
-    #[cfg(not(mobile))]
-    {
-        builder = builder
-            .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_process::init())
-            .plugin(tauri_plugin_global_shortcut::Builder::new().build());
-    }
-
-    builder
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data = app.path().app_data_dir().expect("app data dir");
-            std::fs::create_dir_all(&data).ok();
-            let settings = Arc::new(Mutex::new(settings::load(&data)));
-            let db = LibraryDb::open(&data).expect("library db");
+            use tauri::Manager;
+            let data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("nekobeat"));
+            let _ = std::fs::create_dir_all(&data);
+
+            let settings_val = settings::load(&data);
+            let settings = Arc::new(Mutex::new(settings_val.clone()));
+            let db = LibraryDb::open(&data).unwrap_or_else(|e| {
+                eprintln!("library open failed: {e}");
+                let fb = std::env::temp_dir().join("nekobeat-fallback");
+                let _ = std::fs::create_dir_all(&fb);
+                LibraryDb::open(&fb).expect("fallback library db")
+            });
             let ext = Arc::new(ExtState {
-                registry_url: Mutex::new(settings.lock().extension_registry_url.clone()),
-                download_priority: Mutex::new(
-                    settings.lock().download_provider_priority.clone(),
-                ),
-                metadata_priority: Mutex::new(
-                    settings.lock().metadata_provider_priority.clone(),
-                ),
+                registry_url: Mutex::new(settings_val.extension_registry_url.clone()),
+                download_priority: Mutex::new(settings_val.download_provider_priority.clone()),
+                metadata_priority: Mutex::new(settings_val.metadata_provider_priority.clone()),
                 ..Default::default()
             });
+
             app.manage(shared_player());
             app.manage(db);
             app.manage(StreamState::default());
@@ -91,9 +77,11 @@ pub fn run() {
             library::library_liked,
             stream::stream_search,
             stream::stream_resolve,
+            stream::stream_invalidate,
             hifi::hifi_search,
             hifi::hifi_enqueue,
             hifi::hifi_jobs,
+            hifi::hifi_download_dir,
             lyrics::lyrics_get,
             lyrics::lyrics_notif_show,
             lyrics::lyrics_notif_hide,

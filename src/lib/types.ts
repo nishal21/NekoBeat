@@ -21,9 +21,21 @@ export type LyricLine = {
 
 export type QueueItem = TrackMeta & { queueKey: string };
 
+export type RepeatMode = "off" | "one" | "all";
+
 /** SpotiFLAC Mobile–parity download + app settings */
+export type AccentPreset =
+  | "coral"
+  | "volt"
+  | "rose"
+  | "teal"
+  | "sky"
+  | "orchid";
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
+  /** Brand pulse color — drives --nb-accent* */
+  accentPreset: AccentPreset;
   discordRichPresence: boolean;
   notificationLyrics: boolean;
   sleepTimerMinutes: number | null;
@@ -55,12 +67,15 @@ export type AppSettings = {
   gapless: boolean;
   crossfadeSeconds: number;
   eqBands: number[];
+  /** Absolute folder for HiFi downloads; empty = app data /hifi */
+  downloadDir: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  theme: "system",
+  theme: "dark",
+  accentPreset: "coral",
   discordRichPresence: true,
-  notificationLyrics: true,
+  notificationLyrics: false,
   sleepTimerMinutes: null,
   extensionRegistryUrl: "https://github.com/zarzet/SpotiFLAC-Extension",
   metadataProviderPriority: ["spotify-web"],
@@ -88,6 +103,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   gapless: true,
   crossfadeSeconds: 0,
   eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  downloadDir: "",
 };
 
 export type ExtensionSettingField = {
@@ -137,4 +153,11 @@ export type DownloadJob = {
   sampleRateHz?: number;
   service?: string;
   needsLogin?: boolean;
+  stage?: string;
+  stageLabel?: string;
+  bytesReceived?: number;
+  bytesTotal?: number;
+  speedMbps?: number;
+  metadataEmbedded?: boolean;
+  libraryAdded?: boolean;
 };

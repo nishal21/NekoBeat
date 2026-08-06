@@ -13,12 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rodio = { version = "0.19.0", features = ["symphonia-all"] }
+rodio = { version = "0.19.0", default-features = false, features = ["symphonia-mp3", "symphonia-isomp4", "symphonia-wav", "symphonia-flac"] }
 lofty = "0.22"
 walkdir = "2.5.0"
 rusqlite = { version = "0.32", features = ["bundled"] }

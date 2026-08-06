@@ -1,16 +1,38 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-accent="coral">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
     <title>NekoBeat</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700;800&family=Noto+Sans:wght@400;700;900&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.bunny.net" />
+    <link
+      href="https://fonts.bunny.net/css?family=outfit:400,500,600,700,800|ibm-plex-mono:500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html, body, #root {
+        height: 100%;
+        margin: 0;
+        background: #0c0e12;
+        color: #f2f4f8;
+        font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+      }
+      .boot {
+        display: grid;
+        place-items: center;
+        height: 100%;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+        background:
+          radial-gradient(ellipse 70% 50% at 20% 0%, rgba(255, 61, 110, 0.22), transparent 55%),
+          #0c0e12;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot">Starting NekoBeat…</div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
